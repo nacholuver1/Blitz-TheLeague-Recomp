@@ -69,6 +69,8 @@ Known issues
     shader compiles (cached afterwards).
 
 Credits and licenses
+  AI-assisted: the code was written by Claude (Anthropic's AI, via Claude
+  Code), directed and play-tested by nacholuver1.
   ReXGlue SDK (https://github.com/rexglue/rexglue-sdk), based on Xenia
   (https://xenia.jp). Options menu design adapted from darkuni's MIT-licensed
   recomp menus (https://github.com/darkuni/outrun-arcade-recomp). See the

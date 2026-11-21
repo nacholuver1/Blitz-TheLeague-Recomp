@@ -10,6 +10,12 @@ GPU (Direct3D 12 / Vulkan), audio and input layers.
 C++ that the recompiler generates from the game's executable. To play, you need your own
 copy of the game.
 
+> **AI-assisted project.** The code, build scripts, debugging and documentation in this
+> repository were written by [Claude](https://claude.com/claude-code) (Anthropic's AI, via
+> Claude Code), directed and play-tested by [nacholuver1](https://github.com/nacholuver1).
+> Every commit carries a `Co-Authored-By: Claude` trailer. Treat it like any community
+> project: read the code, and report problems in Issues.
+
 ## Playing
 
 1. Download the latest release from [Releases](../../releases): the `-win64.zip` for Windows or
@@ -116,6 +122,8 @@ the places where a straight translation behaves differently from a real Xbox 360
 
 ## Credits
 
+- Written with [Claude Code](https://claude.com/claude-code) (Anthropic); project direction
+  and play-testing by nacholuver1.
 - [ReXGlue SDK](https://github.com/rexglue/rexglue-sdk) by Tom Clay, built on [Xenia](https://xenia.jp).
 - Menu layout adapted from [darkuni's outrun-arcade-recomp](https://github.com/darkuni/outrun-arcade-recomp) (MIT).
 - Other ReXGlue projects studied while working out the manifest, hooks and SDK fixes (no code
