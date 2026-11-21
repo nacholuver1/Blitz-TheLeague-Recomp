@@ -10,12 +10,15 @@ What you need
   - Your own Blitz: The League disc for Xbox 360 (the USA / Europe release),
     dumped to a disc image (.iso). Other releases won't work: the program only
     matches that exact game executable.
-  - Windows 10 or 11, 64-bit, and a GPU with Direct3D 12 (or Vulkan).
-  - About 7 GB of free space next to blitz.exe for the unpacked game files.
+  - Windows 10 or 11, 64-bit, and a GPU with Direct3D 12 (or Vulkan);
+    or Linux x86-64 (glibc 2.39 / Ubuntu 24.04 or newer) with a Vulkan driver.
+  - About 7 GB of free space next to the program for the unpacked game files.
 
 First run
-  1. Unzip this folder anywhere you like (it is fully portable).
-  2. Run blitz.exe.
+  1. Unzip (Windows) or untar (Linux) this folder anywhere you like - it is
+     fully portable.
+  2. Run blitz.exe (Windows) or ./blitz (Linux). On Linux the file picker needs
+     xdg-desktop-portal or zenity; without one, use --blitz.iso=PATH.
   3. Choose "Use my disc image (.iso)" and pick your dump. It is checked, then
      unpacked into a "game" folder next to blitz.exe (one time only; you can
      delete the .iso afterwards if you want).
@@ -42,7 +45,8 @@ Command-line options (every setting in blitz.toml works as --section.name=value)
   --title.game_root=PATH      play from this extracted game folder
   --blitz.launcher=false      skip the launcher and start the game directly
   --ui.fullscreen=true|false  fullscreen or windowed
-  --gpu.driver=vulkan         use Vulkan instead of Direct3D 12
+  --gpu.driver=vulkan         use Vulkan instead of Direct3D 12 (Linux always
+                              uses Vulkan)
   --gpu.resolution_scale_x=2 --gpu.resolution_scale_y=2   render resolution
   Note: options given on the command line are saved to blitz.toml if you
   change a setting in the menu during that run.

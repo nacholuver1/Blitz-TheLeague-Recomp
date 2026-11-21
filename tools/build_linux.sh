@@ -27,7 +27,10 @@ case "$action" in
         exit 1
       fi
     done
-    cmake --preset linux-amd64 -DREXGLUE_BUILD_TESTS=OFF
+    # The SDK preset names plain clang; Ubuntu's apt.llvm.org packages install clang-20.
+    rm -rf out/build/linux-amd64/CMakeCache.txt out/build/linux-amd64/CMakeFiles
+    cmake --preset linux-amd64 -DREXGLUE_BUILD_TESTS=OFF \
+      -DCMAKE_C_COMPILER="${CC:-clang-20}" -DCMAKE_CXX_COMPILER="${CXX:-clang++-20}"
     cmake --build out/build/linux-amd64 --config Release --target install
     ;;
   configure)
@@ -37,6 +40,12 @@ case "$action" in
   release | relwithdebinfo | debug)
     cd "$ROOT/blitz"
     [ -f out/build/linux-amd64/CMakeCache.txt ] || cmake --preset linux-amd64
+    # Fresh checkout: the generated sources are only added at configure time,
+    # so run codegen first and configure again before the full build.
+    if [ ! -f generated/default/sources.cmake ]; then
+      cmake --build --preset "linux-amd64-$action" --target blitz_codegen
+      cmake --preset linux-amd64
+    fi
     cmake --build --preset "linux-amd64-$action"
     ;;
   *)

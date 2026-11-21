@@ -40,7 +40,9 @@ Copy-Item (Join-Path $sdk "LICENSE") (Join-Path $lic "rexglue-sdk.txt")
 Get-ChildItem (Join-Path $sdk "thirdparty") -Directory | ForEach-Object {
   $files = Get-ChildItem $_.FullName -File | Where-Object { $_.Name -match '^(LICEN[SC]E|COPYING)' }
   foreach ($f in $files) {
-    Copy-Item $f.FullName (Join-Path $lic "$($_.Name)-$($f.Name).txt")
+    $dest = "$($_.Name)-$($f.Name)"
+    if ($dest -notlike "*.txt") { $dest += ".txt" }
+    Copy-Item $f.FullName (Join-Path $lic $dest)
   }
 }
 

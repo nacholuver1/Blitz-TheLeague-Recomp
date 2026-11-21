@@ -1,9 +1,9 @@
 # Blitz: The League — native PC recompilation
 
-An unofficial native Windows port of **Blitz: The League** (Xbox 360, 2006), made by
+An unofficial native Windows and Linux port of **Blitz: The League** (Xbox 360, 2006), made by
 *static recompilation* with the [ReXGlue SDK](https://github.com/rexglue/rexglue-sdk).
 The game's PowerPC code is translated to C++ ahead of time and compiled into a normal
-x64 `blitz.exe`. No emulator runs at play time; the SDK provides the Xbox 360 kernel,
+x64 program (`blitz.exe` on Windows, `blitz` on Linux). No emulator runs at play time; the SDK provides the Xbox 360 kernel,
 GPU (Direct3D 12 / Vulkan), audio and input layers.
 
 **This repository contains no game data.** No disc image, no game files, and none of the
@@ -12,9 +12,10 @@ copy of the game.
 
 ## Playing
 
-1. Download the latest zip from [Releases](../../releases) and unzip it anywhere (it's portable).
+1. Download the latest release from [Releases](../../releases): the `-win64.zip` for Windows or
+   the `-linux-x64.tar.gz` for Linux. Extract it anywhere (it's portable).
 2. Dump your own **Blitz: The League** disc (USA / Europe release) to an `.iso`.
-3. Run `blitz.exe`, choose **Use my disc image (.iso)** and pick your dump. It checks
+3. Run `blitz.exe` (Windows) or `./blitz` (Linux), choose **Use my disc image (.iso)** and pick your dump. It checks
    the game executable, then unpacks the disc into a `game` folder next to the exe (one time).
 4. The launcher opens: pick settings, then **START GAME**.
 
@@ -61,6 +62,30 @@ powershell -ExecutionPolicy Bypass -File tools\make_release.ps1 -Version 1.0.0
 `tools\build_blitz.bat package` builds Release and copies the program files into a local
 `BlitzPC\` play folder without touching its saves or settings.
 
+### Linux (x86-64)
+
+Tested on Ubuntu 24.04 (also under WSL2). Build on the oldest distro you want to support:
+the binary needs that glibc or newer.
+
+```bash
+git clone --recursive https://github.com/nacholuver1/Blitz-TheLeague.git
+cd Blitz-TheLeague
+sudo bash tools/linux_deps.sh          # cmake, ninja, clang-20 (apt.llvm.org), SDL/GTK/audio dev packages
+
+# Vulkan SDK 1.4.313 or newer from https://vulkan.lunarg.com/sdk/home#linux, then:
+source ~/vulkan/<version>/setup-env.sh
+
+tools/build_linux.sh sdk               # applies patches/, builds and installs the SDK
+python3 tools/extract_xiso.py /path/to/your.iso game
+tools/build_linux.sh release           # codegen + build: blitz/out/build/linux-amd64/Release/blitz
+tools/make_release_linux.sh 1.0.0 --no-build   # dist/BlitzTheLeague-1.0.0-linux-x64.tar.gz
+```
+
+With 8 GB of RAM or less, limit parallel jobs (`export CMAKE_BUILD_PARALLEL_LEVEL=6`); the
+generated sources are large.
+
+### Game version
+
 The setup screen only accepts the exact `default.xex` this project was made against
 (SHA-256 in [blitz/src/blitz_setup.cpp](blitz/src/blitz_setup.cpp)). Another release of the
 game needs its own addresses in the manifest and hooks, and a new hash.
@@ -86,8 +111,8 @@ the places where a straight translation behaves differently from a real Xbox 360
 - During the helmet-lift animation a small helmet piece can stay on the player's forehead
   (same on D3D12 and Vulkan).
 - Brief stutter the first time a new effect appears while its shader compiles.
-- Windows only for now. The SDK has Linux presets, but this project hasn't been built
-  or tested there.
+- Linux: builds and boots to the title screen (tested under WSL2 with software rendering);
+  not yet play-tested on real Linux hardware with a GPU driver.
 
 ## Credits
 

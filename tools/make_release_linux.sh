@@ -26,7 +26,10 @@ cp "$SDK/LICENSE" "$STAGE/licenses/rexglue-sdk.txt"
 for dir in "$SDK"/thirdparty/*/; do
   lib="$(basename "$dir")"
   for f in "$dir"LICEN[SC]E* "$dir"COPYING*; do
-    [ -f "$f" ] && cp "$f" "$STAGE/licenses/$lib-$(basename "$f").txt"
+    [ -f "$f" ] || continue
+    name="$lib-$(basename "$f")"
+    [[ "$name" == *.txt ]] || name="$name.txt"
+    cp "$f" "$STAGE/licenses/$name"
   done
 done
 

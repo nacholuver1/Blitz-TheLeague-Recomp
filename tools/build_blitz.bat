@@ -20,6 +20,12 @@ set "PATH=%LLVM_DIR%\bin;%VULKAN_SDK%\Bin;%BLITZ_ROOT%\deps\rexglue-sdk\out\inst
 cd /d "%BLITZ_ROOT%\blitz"
 if errorlevel 1 exit /b 1
 if /i "%ACTION%"=="configure" goto configure
+if not exist "out\build\win-amd64\CMakeCache.txt" cmake --preset win-amd64
+if errorlevel 1 exit /b 1
+rem Fresh checkout: the generated sources are only added at configure time, so
+rem run codegen first and configure again before the full build.
+if not exist "generated\default\sources.cmake" call :codegen
+if errorlevel 1 exit /b 1
 if /i "%ACTION%"=="package" goto package
 cmake --build --preset win-amd64-%ACTION%
 exit /b %errorlevel%
@@ -38,6 +44,12 @@ copy /y "out\build\win-amd64\Release\*.dll" "..\BlitzPC" >nul
 if errorlevel 1 exit /b 1
 echo Packaged into BlitzPC.
 exit /b 0
+
+:codegen
+cmake --build --preset win-amd64-release --target blitz_codegen
+if errorlevel 1 exit /b 1
+cmake --preset win-amd64
+exit /b %errorlevel%
 
 :usage
 echo usage: build_blitz.bat configure / release / relwithdebinfo / package
