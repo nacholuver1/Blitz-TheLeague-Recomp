@@ -16,7 +16,7 @@ under the SDK's license.
 
 The launcher / options menu (`blitz/src/blitz_menu.cpp`, `blitz/src/blitz_ui.h`)
 adapts the layout and behaviour of the menus in
-https://github.com/darkuni/outrun-arcade-recomp.
+[darkuni/outrun-arcade-recomp](https://github.com/darkuni/outrun-arcade-recomp).
 
 ```
 MIT License
