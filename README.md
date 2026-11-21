@@ -6,6 +6,9 @@ The game's PowerPC code is translated to C++ ahead of time and compiled into a n
 x64 program (`blitz.exe` on Windows, `blitz` on Linux). No emulator runs at play time; the SDK provides the Xbox 360 kernel,
 GPU (Direct3D 12 / Vulkan), audio and input layers.
 
+Sequel: [Blitz-TheLeague-II-Recomp](https://github.com/nacholuver1/Blitz-TheLeague-II-Recomp)
+does the same for **Blitz: The League II**.
+
 **This repository contains no game data.** No disc image, no game files, and none of the
 C++ that the recompiler generates from the game's executable. To play, you need your own
 copy of the game.
