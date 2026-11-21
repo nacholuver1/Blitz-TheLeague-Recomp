@@ -1,0 +1,3 @@
+[submodule "deps/rexglue-sdk"]
+	path = deps/rexglue-sdk
+	url = https://github.com/rexglue/rexglue-sdk.git

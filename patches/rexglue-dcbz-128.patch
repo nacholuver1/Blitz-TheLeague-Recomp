@@ -1,0 +1,22 @@
+diff --git a/src/codegen/builder/system.cpp b/src/codegen/builder/system.cpp
+index 898cc4d..4f65482 100644
+--- a/src/codegen/builder/system.cpp
++++ b/src/codegen/builder/system.cpp
+@@ -186,11 +186,15 @@ bool Build<PPC_INST_DCBTST>(BuilderContext& ctx) {
+ 
+ template <>
+ bool Build<PPC_INST_DCBZ>(BuilderContext& ctx) {
++  // [blitz local patch] Xenon's cache line is 128 bytes and plain dcbz clears the
++  // whole line, same as dcbz128. Blitz's code steps 128 bytes per dcbz when
++  // clearing buffers (e.g. 0x8246C63C); clearing only 32 left 3/4 of each line
++  // stale. NHL2K8-Recompiled carries the same fix.
+   ctx.Print("\t{} = (", ctx.EA());
+   if (ctx.insn.operands[0] != 0)
+     ctx.Print("{}.u32 + ", ctx.R(ctx.insn.operands[0]));
+-  ctx.Println("{}.u32) & ~31;", ctx.R(ctx.insn.operands[1]));
+-  ctx.Println("\tmemset((void*)REX_RAW_ADDR({}), 0, 32);", ctx.EA());
++  ctx.Println("{}.u32) & ~127;", ctx.R(ctx.insn.operands[1]));
++  ctx.Println("\tmemset((void*)REX_RAW_ADDR({}), 0, 128);", ctx.EA());
+   return true;
+ }
+ 

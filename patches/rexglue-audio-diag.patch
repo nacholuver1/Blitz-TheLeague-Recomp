@@ -1,0 +1,107 @@
+diff --git a/src/apu/audio_system.cpp b/src/apu/audio_system.cpp
+index d0b4de2..55dd3cf 100644
+--- a/src/apu/audio_system.cpp
++++ b/src/apu/audio_system.cpp
+@@ -41,8 +41,20 @@ struct Slot {
+ struct MixSlot {
+   u32 generation = 0;
+   StreamGuard guard;
++  // [blitz diagnostics] Runs of bad periods and whether they were reported.
++  u64 frames = 0;
++  u32 nonfinite_run = 0;
++  u32 starve_run = 0;
++  u32 silent_run = 0;
++  bool audible_once = false;
++  bool reported_nonfinite = false;
++  bool reported_starve = false;
++  bool reported_silent = false;
+ };
+ 
++// About one second of mixer periods (5.33 ms each).
++constexpr u32 kDiagSecond = 188;
++
+ }  // namespace
+ 
+ struct AudioSystem::State {
+@@ -228,9 +240,50 @@ Result<void> AudioSystem::Start(rex::apu::IAudioDriver* device) {
+         slot.generation = generations[i];
+       }
+       if (!have[i]) {
++        // [blitz diagnostics] a stream that was playing stopped delivering frames
++        if (slot.frames > 0 && ++slot.starve_run == 2 * kDiagSecond && !slot.reported_starve) {
++          slot.reported_starve = true;
++          REXAPU_WARN("audio diag: stream {} has delivered no frames for 2 s (after {} frames)", i,
++                      slot.frames);
++        }
+         continue;
+       }
++      if (slot.reported_starve) {
++        REXAPU_WARN("audio diag: stream {} is delivering frames again", i);
++        slot.reported_starve = false;
++      }
++      slot.starve_run = 0;
++      ++slot.frames;
+       slot.guard.Apply(taken[i].samples, limit);
++      // [blitz diagnostics] NaN/Inf frames (the guard mutes them) and long digital silence
++      if (slot.guard.last_nonfinite()) {
++        if (++slot.nonfinite_run == kDiagSecond && !slot.reported_nonfinite) {
++          slot.reported_nonfinite = true;
++          REXAPU_WARN("audio diag: stream {} has produced NaN/Inf samples for 1 s; muted by the "
++                      "stream guard (after {} frames)",
++                      i, slot.frames);
++        }
++      } else {
++        if (slot.reported_nonfinite) {
++          REXAPU_WARN("audio diag: stream {} samples are finite again after {} bad frames", i,
++                      slot.nonfinite_run);
++          slot.reported_nonfinite = false;
++        }
++        slot.nonfinite_run = 0;
++        if (slot.guard.last_peak() > 0.0f) {
++          if (slot.reported_silent) {
++            REXAPU_WARN("audio diag: stream {} is audible again", i);
++            slot.reported_silent = false;
++          }
++          slot.audible_once = true;
++          slot.silent_run = 0;
++        } else if (slot.audible_once && ++slot.silent_run == 30 * kDiagSecond &&
++                   !slot.reported_silent) {
++          slot.reported_silent = true;
++          REXAPU_WARN("audio diag: stream {} has been digitally silent for 30 s (after {} frames)",
++                      i, slot.frames);
++        }
++      }
+       for (u32 k = 0; k < rex::apu::kAudioFrameSamples; ++k) {
+         s.planar[k] += taken[i].samples[k];
+       }
+diff --git a/src/apu/mix.cpp b/src/apu/mix.cpp
+index ddc3e33..18fb81e 100644
+--- a/src/apu/mix.cpp
++++ b/src/apu/mix.cpp
+@@ -63,6 +63,8 @@ void StreamGuard::Apply(std::span<f32, rex::apu::kAudioFrameSamples> frame, f64
+     }
+     peak = std::max(peak, std::fabs(sample));
+   }
++  last_nonfinite_ = !finite;
++  last_peak_ = finite ? peak : 0.0f;
+   if (!finite) {
+     std::ranges::fill(frame, 0.0f);
+     over_periods_ = kPeakPeriods;
+diff --git a/src/apu/mix.h b/src/apu/mix.h
+index 6107c0f..16a49bb 100644
+--- a/src/apu/mix.h
++++ b/src/apu/mix.h
+@@ -90,7 +90,13 @@ class StreamGuard {
+    */
+   void Apply(std::span<f32, rex::apu::kAudioFrameSamples> frame, f64 peak_limit);
+ 
++  // [blitz diagnostics] What the last Apply saw.
++  bool last_nonfinite() const { return last_nonfinite_; }
++  f32 last_peak() const { return last_peak_; }
++
+  private:
++  bool last_nonfinite_ = false;
++  f32 last_peak_ = 0.0f;
+   f32 applied_ = 1.0f;
+   u32 over_periods_ = 0;
+   bool silenced_ = false;

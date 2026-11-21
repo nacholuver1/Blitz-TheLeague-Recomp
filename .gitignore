@@ -1,0 +1,32 @@
+# ---- Game data: never commit anything from the disc ----
+*.iso
+*.xex
+*.mpk
+game/
+# Recompiled C++ is a translation of the game's code; codegen recreates it from your own disc.
+blitz/generated/
+
+# ---- Build output ----
+blitz/out/
+dist/
+deps/build/
+
+# ---- Local copy of the game and its user data (saves, settings, logs) ----
+BlitzPC/
+*.toml.bak
+crashes/
+logs/
+cache/
+
+# ---- Scratch / old experiments ----
+work/
+ppc/
+config/
+deps/refs/
+deps/XenonRecomp/
+deps/XenosRecomp/
+tools/build_xenonrecomp.bat
+tools/xexdump/*.exe
+*.png
+*.dmp
+__pycache__/

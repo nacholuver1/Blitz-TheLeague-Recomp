@@ -1,0 +1,63 @@
+diff --git a/src/kernel/xboxkrnl/xboxkrnl_rtl.cpp b/src/kernel/xboxkrnl/xboxkrnl_rtl.cpp
+index fb6d408..aa3569b 100644
+--- a/src/kernel/xboxkrnl/xboxkrnl_rtl.cpp
++++ b/src/kernel/xboxkrnl/xboxkrnl_rtl.cpp
+@@ -435,7 +435,22 @@ u32 RtlInitializeCriticalSectionAndSpinCount_entry(GuestPtrT<X_RTL_CRITICAL_SECT
+   return RtlInitializeCriticalSectionAndSpinCount(cs, spin_count);
+ }
+ 
++// [blitz debug] full trace of one critical section, with the guest caller.
++static constexpr u32 kCsDbgTrace = 0x82D34F78;
++static void CsDbgTrace(const char* what, GuestPtrT<X_RTL_CRITICAL_SECTION>& cs) {
++  if (cs.GetGuestAddress() != kCsDbgTrace) return;
++  auto* thread = KernelThread::GetCallingThread();
++  const u32 lr = static_cast<u32>(thread->GetThreadState()->GetContext()->lr);
++  const u8* raw = reinterpret_cast<const u8*>(&*cs);
++  const u32 wrap_owner = (u32(raw[0x1C]) << 24) | (u32(raw[0x1D]) << 16) | (u32(raw[0x1E]) << 8) | raw[0x1F];
++  const u32 wrap_count = (u32(raw[0x20]) << 24) | (u32(raw[0x21]) << 16) | (u32(raw[0x22]) << 8) | raw[0x23];
++  REXKRNL_WARN("CSTRACE {:5} me={:08X} lr={:08X} owner={:08X} rec={} lock={} wrap_owner={:08X} wrap_count={}",
++               what, thread->GetGuestObject(), lr, u32(cs->owning_thread), i32(cs->recursion_count),
++               LockCount(*cs).load(), wrap_owner, wrap_count);
++}
++
+ void RtlEnterCriticalSection_entry(GuestPtrT<X_RTL_CRITICAL_SECTION> cs) {
++  CsDbgTrace("enter", cs);
+   u32 cur_thread = KernelThread::GetCallingThread()->GetGuestObject();
+   u32 spin_count = cs->header.absolute * 256;
+ 
+@@ -453,8 +468,14 @@ void RtlEnterCriticalSection_entry(GuestPtrT<X_RTL_CRITICAL_SECTION> cs) {
+     }
+   }
+ 
+-  if (++LockCount(*cs) != 0) {
++  if (const i32 lc = ++LockCount(*cs); lc != 0) {
++    // [blitz debug] contended enter
++    REXKRNL_WARN("CSDBG wait   cs={:08X} me={:08X} owner={:08X} lock={} rec={}",
++                 cs.GetGuestAddress(), cur_thread, u32(cs->owning_thread), lc,
++                 i32(cs->recursion_count));
+     KeWaitForSingleObject(cs.GetGuestAddress(), 8, 0, 0, nullptr);
++    REXKRNL_WARN("CSDBG woke   cs={:08X} me={:08X} owner={:08X} lock={}", cs.GetGuestAddress(),
++                 cur_thread, u32(cs->owning_thread), LockCount(*cs).load());
+   }
+ 
+   REX_ASSERT(cs->owning_thread == 0);
+@@ -479,6 +500,7 @@ u32 RtlTryEnterCriticalSection_entry(GuestPtrT<X_RTL_CRITICAL_SECTION> cs) {
+ }
+ 
+ void RtlLeaveCriticalSection_entry(GuestPtrT<X_RTL_CRITICAL_SECTION> cs) {
++  CsDbgTrace("leave", cs);
+   REX_ASSERT(cs->owning_thread == KernelThread::GetCallingThread()->GetGuestObject());
+ 
+   REX_ASSERT(cs->recursion_count > 0);
+@@ -490,7 +512,10 @@ void RtlLeaveCriticalSection_entry(GuestPtrT<X_RTL_CRITICAL_SECTION> cs) {
+   }
+ 
+   cs->owning_thread = 0;
+-  if (--LockCount(*cs) != -1) {
++  if (const i32 lc = --LockCount(*cs); lc != -1) {
++    // [blitz debug] release with waiters
++    REXKRNL_WARN("CSDBG signal cs={:08X} me={:08X} lock={}", cs.GetGuestAddress(),
++                 KernelThread::GetCallingThread()->GetGuestObject(), lc);
+     KeSetEvent(cs.GetGuestAddress(), 1, 0);
+   }
+ }
