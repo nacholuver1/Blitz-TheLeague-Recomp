@@ -40,8 +40,8 @@ Different install paths: set `BLITZ_VCVARS` (path to `vcvars64.bat`), `LLVM_DIR`
 `VULKAN_SDK` before running the scripts.
 
 ```bat
-git clone --recursive https://github.com/nacholuver1/Blitz-TheLeague.git
-cd Blitz-TheLeague
+git clone --recursive https://github.com/nacholuver1/Blitz-TheLeague-Recomp.git
+cd Blitz-TheLeague-Recomp
 
 rem 1. ReXGlue SDK v0.11.0 (submodule) + this project's patches, then build and install it
 git -C deps/rexglue-sdk apply ../../patches/rexglue-dcbz-128.patch ../../patches/rexglue-audio-diag.patch
@@ -68,8 +68,8 @@ Tested on Ubuntu 24.04 (also under WSL2). Build on the oldest distro you want to
 the binary needs that glibc or newer.
 
 ```bash
-git clone --recursive https://github.com/nacholuver1/Blitz-TheLeague.git
-cd Blitz-TheLeague
+git clone --recursive https://github.com/nacholuver1/Blitz-TheLeague-Recomp.git
+cd Blitz-TheLeague-Recomp
 sudo bash tools/linux_deps.sh          # cmake, ninja, clang-20 (apt.llvm.org), SDL/GTK/audio dev packages
 
 # Vulkan SDK 1.4.313 or newer from https://vulkan.lunarg.com/sdk/home#linux, then:
