@@ -1,0 +1,102 @@
+name: Bug report
+description: Something doesn't work, crashes, looks wrong or sounds wrong.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! Please search [existing issues](https://github.com/nacholuver1/Blitz-TheLeague-Recomp/issues?q=is%3Aissue) first.
+        **Never upload or link game files, disc images or the `game` folder.**
+
+  - type: checkboxes
+    id: own-copy
+    attributes:
+      label: Your copy of the game
+      options:
+        - label: "I'm using my own dump of the Blitz: The League disc (USA / Europe release), set up through the program's setup screen."
+          required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Release version
+      description: From the download's file name, e.g. 1.0.0. Say so if you built it from source (and which commit).
+      placeholder: "1.0.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows 11
+        - Windows 10
+        - Linux (desktop)
+        - Linux (Steam Deck / SteamOS)
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: os-details
+    attributes:
+      label: OS details
+      description: Windows build, or Linux distro and version (and Wayland / X11).
+      placeholder: "Windows 11 24H2 / Fedora 41 KDE Wayland"
+
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU and driver version
+      placeholder: "NVIDIA RTX 3070, driver 621.35"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: renderer
+    attributes:
+      label: Renderer
+      description: Linux always uses Vulkan.
+      options:
+        - Direct3D 12 (Windows default)
+        - Vulkan
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What you saw or heard, and what you expected instead. Screenshots or a short video help a lot.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: How to make it happen
+      description: Where in the game (menu, mode, team, play) and the steps. Does it happen every time?
+      placeholder: |
+        1. Start an exhibition game
+        2. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: settings
+    attributes:
+      label: Settings
+      description: Anything you changed in the launcher (render resolution, anti-aliasing, VSync...). Pasting your `blitz.toml` is easiest.
+      render: toml
+
+  - type: textarea
+    id: log
+    attributes:
+      label: Log file
+      description: |
+        Drag in the newest `logs/blitz_*.log` from the game's folder (next to blitz.exe / blitz).
+        If it crashed, also attach the newest file from `crashes/` (Windows).
+    validations:
+      required: true
