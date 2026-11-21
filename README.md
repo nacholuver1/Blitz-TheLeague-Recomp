@@ -104,7 +104,7 @@ the places where a straight translation behaves differently from a real Xbox 360
 | [blitz/src/blitz_menu.cpp](blitz/src/blitz_menu.cpp) | Pre-game launcher and in-game options menu (F1 / Guide / LB+RB+Back). |
 | [blitz/src/blitz_fp_guard.h](blitz/src/blitz_fp_guard.h), [blitz_crash_dump.h](blitz/src/blitz_crash_dump.h) | Masks host SSE floating-point exceptions; writes minidumps to `crashes\`. |
 | [patches/](patches/) | SDK patches: `dcbz` clears a 128-byte cache line on Xenon (the codegen cleared 32), and extra audio-stream diagnostics in the log. `rexglue-cs-debug-trace.patch` is an optional contended-lock tracer used to find the boot deadlock. |
-| [tools/](tools/) | Build scripts, ISO extractor, XEX header dump, and the debugging helpers used along the way (guest memory peek, LLDB probe, thread stack dump, screenshot automation). |
+| [tools/](tools/) | Build scripts (Windows and Linux), release packers, ISO extractor, XEX header dump, and the debugging helpers used along the way (guest memory peek, LLDB probe, thread stack dump, screenshot automation). |
 
 ## Known issues
 
@@ -118,6 +118,11 @@ the places where a straight translation behaves differently from a real Xbox 360
 
 - [ReXGlue SDK](https://github.com/rexglue/rexglue-sdk) by Tom Clay, built on [Xenia](https://xenia.jp).
 - Menu layout adapted from [darkuni's outrun-arcade-recomp](https://github.com/darkuni/outrun-arcade-recomp) (MIT).
+- Other ReXGlue projects studied while working out the manifest, hooks and SDK fixes (no code
+  copied): [NHL2K8-Recompiled](https://github.com/anishchandra24/NHL2K8-Recompiled) (it carries
+  the same 128-byte `dcbz` fix), [KameoRePowered](https://github.com/birabittoh/KameoRePowered),
+  [PerfectDarkZeroRecomp](https://github.com/nikolaygorb/PerfectDarkZeroRecomp) and
+  [afterburner-climax-recomp](https://github.com/darkuni/afterburner-climax-recomp).
 - See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## Legal

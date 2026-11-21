@@ -11,7 +11,8 @@ What you need
     dumped to a disc image (.iso). Other releases won't work: the program only
     matches that exact game executable.
   - Windows 10 or 11, 64-bit, and a GPU with Direct3D 12 (or Vulkan);
-    or Linux x86-64 (glibc 2.39 / Ubuntu 24.04 or newer) with a Vulkan driver.
+    or Linux x86-64 with glibc 2.38 and GCC 13's libstdc++ or newer (Ubuntu
+    24.04, Fedora 39, current Arch / SteamOS / Bazzite) and a Vulkan driver.
   - About 7 GB of free space next to the program for the unpacked game files.
 
 First run

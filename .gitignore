@@ -26,7 +26,7 @@ deps/refs/
 deps/XenonRecomp/
 deps/XenosRecomp/
 tools/build_xenonrecomp.bat
-tools/xexdump/*.exe
+tools/xexdump/
 *.png
 *.dmp
 __pycache__/
