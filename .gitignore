@@ -18,6 +18,10 @@ crashes/
 logs/
 cache/
 
+# ---- Personal launchers for a local BlitzPC folder ----
+/play.bat
+/play_vulkan.bat
+
 # ---- Scratch / old experiments ----
 work/
 ppc/
