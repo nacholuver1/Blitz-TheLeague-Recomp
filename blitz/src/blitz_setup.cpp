@@ -30,13 +30,19 @@
 
 #ifdef _WIN32
 #include <Windows.h>
-#include <bcrypt.h>
 #include <shobjidl.h>
-#pragma comment(lib, "bcrypt.lib")
 #pragma comment(lib, "ole32.lib")
+#else
+#include <SDL3/SDL.h>
 #endif
 
 namespace fs = std::filesystem;
+
+#ifdef _WIN32
+#define BLITZ_EXE "blitz.exe"
+#else
+#define BLITZ_EXE "blitz"
+#endif
 
 namespace blitz {
 namespace {
@@ -68,15 +74,56 @@ uint32_t XexTitleId(const std::vector<uint8_t>& d) {
   return 0;
 }
 
-bool Sha256(const std::vector<uint8_t>& data, std::array<uint8_t, 32>& out) {
-#ifdef _WIN32
-  return BCryptHash(BCRYPT_SHA256_ALG_HANDLE, nullptr, 0, const_cast<uint8_t*>(data.data()),
-                    static_cast<ULONG>(data.size()), out.data(), 32) == 0;
-#else
-  (void)data;
-  (void)out;
-  return false;
-#endif
+// Plain SHA-256 (FIPS 180-4), so the check is the same on every platform.
+std::array<uint8_t, 32> Sha256(const std::vector<uint8_t>& data) {
+  static constexpr uint32_t k[64] = {
+      0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
+      0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
+      0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
+      0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+      0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
+      0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+      0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
+      0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+      0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+      0xc67178f2};
+  uint32_t h[8] = {0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+                   0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19};
+  const auto rotr = [](uint32_t x, int n) { return (x >> n) | (x << (32 - n)); };
+  std::vector<uint8_t> msg(data);
+  const uint64_t bits = static_cast<uint64_t>(data.size()) * 8;
+  msg.push_back(0x80);
+  while (msg.size() % 64 != 56) msg.push_back(0);
+  for (int i = 7; i >= 0; i--) msg.push_back(static_cast<uint8_t>(bits >> (i * 8)));
+  for (size_t off = 0; off < msg.size(); off += 64) {
+    uint32_t w[64];
+    for (int i = 0; i < 16; i++) w[i] = Be32(&msg[off + i * 4]);
+    for (int i = 16; i < 64; i++) {
+      const uint32_t s0 = rotr(w[i - 15], 7) ^ rotr(w[i - 15], 18) ^ (w[i - 15] >> 3);
+      const uint32_t s1 = rotr(w[i - 2], 17) ^ rotr(w[i - 2], 19) ^ (w[i - 2] >> 10);
+      w[i] = w[i - 16] + s0 + w[i - 7] + s1;
+    }
+    uint32_t a = h[0], b = h[1], c = h[2], d = h[3], e = h[4], f = h[5], g = h[6], hh = h[7];
+    for (int i = 0; i < 64; i++) {
+      const uint32_t t1 = hh + (rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25)) + ((e & f) ^ (~e & g)) +
+                          k[i] + w[i];
+      const uint32_t t2 = (rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22)) + ((a & b) ^ (a & c) ^ (b & c));
+      hh = g;
+      g = f;
+      f = e;
+      e = d + t1;
+      d = c;
+      c = b;
+      b = a;
+      a = t1 + t2;
+    }
+    h[0] += a; h[1] += b; h[2] += c; h[3] += d; h[4] += e; h[5] += f; h[6] += g; h[7] += hh;
+  }
+  std::array<uint8_t, 32> out{};
+  for (int i = 0; i < 8; i++) {
+    for (int j = 0; j < 4; j++) out[i * 4 + j] = static_cast<uint8_t>(h[i] >> (24 - j * 8));
+  }
+  return out;
 }
 
 std::string CheckXex(const std::vector<uint8_t>& xex) {
@@ -87,9 +134,7 @@ std::string CheckXex(const std::vector<uint8_t>& xex) {
     std::snprintf(buf, sizeof(buf), "That isn't Blitz: The League (title ID %08X).", tid);
     return buf;
   }
-  std::array<uint8_t, 32> hash{};
-  if (!Sha256(xex, hash)) return "Could not check default.xex.";
-  if (hash != kXexSha256) {
+  if (Sha256(xex) != kXexSha256) {
     return "That copy of Blitz: The League is a different version from the one this build "
            "was made from (the USA / Europe disc).";
   }
@@ -255,14 +300,14 @@ void Unpack(fs::path iso, fs::path dest, Progress& p) {
   std::error_code ec;
   if (fs::exists(dest, ec)) {
     return SetError(p, "A 'game' folder that doesn't hold this game already exists next to "
-                       "blitz.exe. Move or delete it, then try again.");
+                       BLITZ_EXE ". Move or delete it, then try again.");
   }
   const fs::path partial = fs::path(dest).concat(".partial");
   fs::remove_all(partial, ec);  // a previous interrupted unpack
   const auto space = fs::space(dest.parent_path(), ec);
   if (!ec && space.available < total + (256ull << 20)) {
     char buf[160];
-    std::snprintf(buf, sizeof(buf), "Not enough disk space: unpacking needs %.1f GB next to blitz.exe.",
+    std::snprintf(buf, sizeof(buf), "Not enough disk space: unpacking needs %.1f GB next to " BLITZ_EXE ".",
                   static_cast<double>(total) / (1ull << 30));
     return SetError(p, buf);
   }
@@ -319,15 +364,20 @@ void Unpack(fs::path iso, fs::path dest, Progress& p) {
 }
 
 // ------------------------------------------------------------------ file picker
+struct PickResult {
+  std::optional<fs::path> path;  // empty when cancelled or failed
+  std::string error;             // set when no picker could be shown
+};
+
 #ifdef _WIN32
 // Runs the Windows file dialog on its own thread so the setup screen keeps
 // drawing; owned by our window so it stays on top of it.
-std::future<std::optional<fs::path>> PickAsync(bool folder) {
+std::future<PickResult> PickAsync(bool folder) {
   HWND owner = nullptr;
   if (OurWindowInFront()) owner = GetForegroundWindow();
-  return std::async(std::launch::async, [folder, owner]() -> std::optional<fs::path> {
+  return std::async(std::launch::async, [folder, owner]() -> PickResult {
     const HRESULT init = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-    std::optional<fs::path> result;
+    PickResult result;
     IFileOpenDialog* dlg = nullptr;
     if (SUCCEEDED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER,
                                    IID_PPV_ARGS(&dlg)))) {
@@ -350,7 +400,7 @@ std::future<std::optional<fs::path>> PickAsync(bool folder) {
         if (SUCCEEDED(dlg->GetResult(&item))) {
           PWSTR path = nullptr;
           if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &path))) {
-            result = fs::path(path);
+            result.path = fs::path(path);
             CoTaskMemFree(path);
           }
           item->Release();
@@ -363,15 +413,38 @@ std::future<std::optional<fs::path>> PickAsync(bool folder) {
   });
 }
 #else
-std::future<std::optional<fs::path>> PickAsync(bool) {
-  std::promise<std::optional<fs::path>> p;
-  p.set_value(std::nullopt);
-  return p.get_future();
+// SDL3's file dialog (xdg-desktop-portal, or zenity / kdialog when no portal).
+// The callback can run on any thread.
+std::future<PickResult> PickAsync(bool folder) {
+  auto* promise = new std::promise<PickResult>();
+  auto future = promise->get_future();
+  const SDL_DialogFileCallback done = [](void* userdata, const char* const* list, int) {
+    auto* p = static_cast<std::promise<PickResult>*>(userdata);
+    PickResult result;
+    if (!list) {
+      result.error = std::string("Could not open a file picker (") + SDL_GetError() +
+                     "). Start the game with --blitz.iso=/path/to/your.iso or "
+                     "--title.game_root=/path/to/game instead.";
+    } else if (list[0]) {
+      result.path = fs::path(list[0]);
+    }
+    p->set_value(std::move(result));
+    delete p;
+  };
+  if (folder) {
+    SDL_ShowOpenFolderDialog(done, promise, nullptr, nullptr, false);
+  } else {
+    static const SDL_DialogFileFilter filters[] = {{"Xbox 360 disc image (*.iso)", "iso;ISO"},
+                                                   {"All files", "*"}};
+    SDL_ShowOpenFileDialog(done, promise, nullptr, filters, 2, nullptr, false);
+  }
+  return future;
 }
 #endif
 
 // ------------------------------------------------------------------ dialog
-enum Row { kUseIso, kUseFolder, kQuit, kRowCount };
+enum Row { kUseIso, kUseFolder, kQuit };
+constexpr int kRowCount = 3;
 
 const char* RowLabel(int row) {
   switch (row) {
@@ -385,7 +458,7 @@ const char* RowLabel(int row) {
 constexpr const char* kIntro =
     "This build doesn't include the game. You need your own copy of Blitz: The League for "
     "Xbox 360 (USA / Europe disc), dumped to a disc image (.iso). The image is unpacked into a "
-    "'game' folder next to blitz.exe (about 6.3 GB, one time only). If you already extracted "
+    "'game' folder next to " BLITZ_EXE " (about 6.3 GB, one time only). If you already extracted "
     "the disc, choose that folder instead (it must contain default.xex).";
 
 class SetupDialog final : public rex::ui::IDialog {
@@ -495,7 +568,7 @@ class SetupDialog final : public rex::ui::IDialog {
     std::string bottom = status_;
     ImU32 bottom_col = status_ok_ ? kAccent : kError;
     if (picker_.valid()) {
-      bottom = "Waiting for you to choose in the Windows file dialog...";
+      bottom = "Waiting for you to choose a file...";
       bottom_col = kGrey;
     }
     y += lh * 0.4f;
@@ -548,8 +621,10 @@ class SetupDialog final : public rex::ui::IDialog {
   void Poll() {
     if (picker_.valid() &&
         picker_.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
-      const auto picked = picker_.get();
+      const PickResult result = picker_.get();
+      const auto& picked = result.path;
       wait_release_ = true;  // the click/Enter that closed the picker
+      if (!result.error.empty()) SetStatus(result.error, false);
       if (picked) {
         if (picking_folder_) {
           if (auto bad = CheckGameFolder(*picked); bad.empty()) {
@@ -593,7 +668,7 @@ class SetupDialog final : public rex::ui::IDialog {
   bool wait_release_ = true;
   bool done_ = false;
   bool picking_folder_ = false;
-  std::future<std::optional<fs::path>> picker_;
+  std::future<PickResult> picker_;
   Progress progress_;
   std::thread worker_;
   Repeater up_, down_, accept_, back_;

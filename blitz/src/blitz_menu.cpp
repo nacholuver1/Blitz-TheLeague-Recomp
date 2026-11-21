@@ -450,22 +450,11 @@ bool AnyRestartPending() {
 }
 
 void StartMenuChordWatcher(rex::ui::IUISystem& ui) {
-#ifdef _WIN32
   if (g_watch_running.exchange(true)) return;
   g_watch_thread = std::thread([&ui] {
     bool was_down = false;
-    const WORD chord =
-        XINPUT_GAMEPAD_LEFT_SHOULDER | XINPUT_GAMEPAD_RIGHT_SHOULDER | XINPUT_GAMEPAD_BACK;
     while (g_watch_running.load()) {
-      bool down = false;
-      if (auto get_state = LoadXInput()) {
-        for (DWORD i = 0; i < XUSER_MAX_COUNT; i++) {
-          XINPUT_STATE st{};
-          if (get_state(i, &st) != ERROR_SUCCESS) continue;
-          const WORD b = st.Gamepad.wButtons;
-          down |= (b & kGuideButton) != 0 || (b & chord) == chord;
-        }
-      }
+      const bool down = MenuChordDown();
       if (down && !was_down) {
         ui.PostTask([&ui] { ui.ToggleOverlay(kMenuOverlayName); });
       }
@@ -473,9 +462,6 @@ void StartMenuChordWatcher(rex::ui::IUISystem& ui) {
       std::this_thread::sleep_for(std::chrono::milliseconds(30));
     }
   });
-#else
-  (void)ui;
-#endif
 }
 
 void StopMenuChordWatcher() {

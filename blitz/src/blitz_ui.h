@@ -15,6 +15,8 @@
 #ifdef _WIN32
 #include <Windows.h>
 #include <Xinput.h>
+#else
+#include <SDL3/SDL.h>
 #endif
 
 namespace blitz::ui {
@@ -61,6 +63,23 @@ inline bool OurWindowInFront() {
 inline bool KeyDown(int vk) { return (GetAsyncKeyState(vk) & 0x8000) != 0; }
 #endif
 
+#ifndef _WIN32
+// SDL3 (the SDK's window and input backend on Linux). Gamepads the SDK has
+// not opened are opened once here; SDL keeps them open.
+template <typename Fn>
+void ForEachGamepad(Fn&& fn) {
+  int count = 0;
+  SDL_JoystickID* ids = SDL_GetGamepads(&count);
+  if (!ids) return;
+  for (int i = 0; i < count; i++) {
+    SDL_Gamepad* pad = SDL_GetGamepadFromID(ids[i]);
+    if (!pad) pad = SDL_OpenGamepad(ids[i]);
+    if (pad) fn(pad);
+  }
+  SDL_free(ids);
+}
+#endif
+
 inline InputState ReadInput() {
   InputState s{};
 #ifdef _WIN32
@@ -86,8 +105,54 @@ inline InputState ReadInput() {
       s.back |= (b & XINPUT_GAMEPAD_B) != 0;
     }
   }
+#else
+  if (SDL_GetKeyboardFocus()) {
+    const bool* k = SDL_GetKeyboardState(nullptr);
+    s.up = k[SDL_SCANCODE_UP];
+    s.down = k[SDL_SCANCODE_DOWN];
+    s.left = k[SDL_SCANCODE_LEFT];
+    s.right = k[SDL_SCANCODE_RIGHT];
+    s.accept = k[SDL_SCANCODE_RETURN] || k[SDL_SCANCODE_SPACE];
+    s.back = k[SDL_SCANCODE_ESCAPE] || k[SDL_SCANCODE_BACKSPACE];
+  }
+  ForEachGamepad([&s](SDL_Gamepad* pad) {
+    const auto b = [pad](SDL_GamepadButton btn) { return SDL_GetGamepadButton(pad, btn); };
+    const Sint16 lx = SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFTX);
+    const Sint16 ly = SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFTY);  // + is down
+    s.up |= b(SDL_GAMEPAD_BUTTON_DPAD_UP) || ly < -16000;
+    s.down |= b(SDL_GAMEPAD_BUTTON_DPAD_DOWN) || ly > 16000;
+    s.left |= b(SDL_GAMEPAD_BUTTON_DPAD_LEFT) || lx < -16000;
+    s.right |= b(SDL_GAMEPAD_BUTTON_DPAD_RIGHT) || lx > 16000;
+    s.accept |= b(SDL_GAMEPAD_BUTTON_SOUTH) || b(SDL_GAMEPAD_BUTTON_START);
+    s.back |= b(SDL_GAMEPAD_BUTTON_EAST);
+  });
 #endif
   return s;
+}
+
+// True while the controller's menu chord is held: Guide, or LB + RB + Back.
+inline bool MenuChordDown() {
+  bool down = false;
+#ifdef _WIN32
+  const WORD chord =
+      XINPUT_GAMEPAD_LEFT_SHOULDER | XINPUT_GAMEPAD_RIGHT_SHOULDER | XINPUT_GAMEPAD_BACK;
+  if (auto get_state = LoadXInput()) {
+    for (DWORD i = 0; i < XUSER_MAX_COUNT; i++) {
+      XINPUT_STATE st{};
+      if (get_state(i, &st) != ERROR_SUCCESS) continue;
+      const WORD b = st.Gamepad.wButtons;
+      down |= (b & kGuideButton) != 0 || (b & chord) == chord;
+    }
+  }
+#else
+  ForEachGamepad([&down](SDL_Gamepad* pad) {
+    const auto b = [pad](SDL_GamepadButton btn) { return SDL_GetGamepadButton(pad, btn); };
+    down |= b(SDL_GAMEPAD_BUTTON_GUIDE) ||
+            (b(SDL_GAMEPAD_BUTTON_LEFT_SHOULDER) && b(SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER) &&
+             b(SDL_GAMEPAD_BUTTON_BACK));
+  });
+#endif
+  return down;
 }
 
 inline bool AnyInput(const InputState& s) {

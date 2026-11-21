@@ -34,7 +34,7 @@
                 "CMAKE_CROSS_CONFIGS": "all",
                 "CMAKE_DEFAULT_BUILD_TYPE": "Debug",
                 "CMAKE_DEFAULT_CONFIGS": "all",
-                "CMAKE_PREFIX_PATH": "${sourceDir}/../deps/rexglue-sdk/out/install/win-amd64"
+                "CMAKE_PREFIX_PATH": "${sourceDir}/../deps/rexglue-sdk/out/install/linux-amd64"
             },
             "condition": {
                 "type": "equals",

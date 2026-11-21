@@ -21,6 +21,10 @@ set(BLITZ_HOST_SOURCES src/blitz_hooks.cpp src/blitz_menu.cpp src/blitz_setup.cp
 # OBJECT and never STATIC, an archive drops the REX_EXPORT symbols.
 add_library(blitz_common OBJECT ${BLITZ_HOST_SOURCES})
 rexglue_setup_host_library(blitz_common)
+if (NOT WIN32)
+  # Menu input and the file picker use SDL3 directly on Linux (XInput on Windows).
+  target_link_libraries(blitz_common PRIVATE SDL3::SDL3)
+endif ()
 
 if (WIN32)
   add_executable(blitz WIN32 src/main.cpp)

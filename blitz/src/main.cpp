@@ -15,6 +15,7 @@
 #include "generated/default/blitz_init.h"
 
 #include <atomic>
+#include <cstdlib>
 #include <filesystem>
 
 #include <rex/path_settings.h>
@@ -164,6 +165,8 @@ class BlitzApp : public rex::app::TitleApp {
       REXLOG_INFO("blitz: relaunching to apply startup-only settings");
 #ifdef _WIN32
       SetEnvironmentVariableW(L"REX_BLITZ_LAUNCHER", L"false");
+#else
+      setenv("REX_BLITZ_LAUNCHER", "false", 1);
 #endif
       RequestRestart();
       return false;
