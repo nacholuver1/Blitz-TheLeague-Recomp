@@ -1,17 +1,22 @@
 #!/usr/bin/env bash
 # Packs the Linux player download: dist/BlitzTheLeague-<version>-linux-x64.tar.gz
 # Contents: blitz, the SDK shared libraries, README.txt and licenses/. Never any game data.
-# usage: tools/make_release_linux.sh <version> [--no-build]
+# The version is blitz/CMakeLists.txt project(VERSION) (the updater compares it with GitHub);
+# keep the name ending in -linux-x64.tar.gz: the updater looks for it.
+# usage: tools/make_release_linux.sh [<version>] [--no-build]
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VERSION="${1:?usage: $0 <version> [--no-build]}"
+CMAKE_VERSION="$(sed -n 's/^project([a-z0-9]* VERSION \([0-9.]*\).*/\1/p' "$ROOT/blitz/CMakeLists.txt")"
+[ -n "$CMAKE_VERSION" ] || { echo "no project(... VERSION x.y.z) in blitz/CMakeLists.txt" >&2; exit 1; }
+if [ "${1:-}" = "--no-build" ] || [ -z "${1:-}" ]; then VERSION="$CMAKE_VERSION"; else VERSION="$1"; shift; fi
+[ "$VERSION" = "$CMAKE_VERSION" ] || { echo "version $VERSION differs from CMakeLists.txt's $CMAKE_VERSION" >&2; exit 1; }
 SDK="$ROOT/deps/rexglue-sdk"
 BIN="$ROOT/blitz/out/build/linux-amd64/Release"
 NAME="BlitzTheLeague-$VERSION-linux-x64"
 STAGE="$ROOT/dist/$NAME"
 TAR="$ROOT/dist/$NAME.tar.gz"
 
-[ "${2:-}" = "--no-build" ] || "$ROOT/tools/build_linux.sh" release
+[ "${1:-}" = "--no-build" ] || "$ROOT/tools/build_linux.sh" release
 
 rm -rf "$STAGE" "$TAR"
 mkdir -p "$STAGE/licenses"

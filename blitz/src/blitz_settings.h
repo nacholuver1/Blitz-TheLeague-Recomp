@@ -16,6 +16,8 @@ class BlitzSettings : public rex::SettingOwner {
 
   REX_SETTING(bool, show_fps, false, "Show the FPS counter (debug overlay) at startup");
   REX_SETTING(bool, launcher, true, "Show the launcher menu before the game starts");
+  REX_SETTING(bool, check_updates, true,
+              "The launcher asks GitHub for a newer release and offers to install it");
   REX_SETTING(std::filesystem::path, iso, "",
               "Disc image to set up from on first run (--blitz.iso=path); unpacked into a "
               "'game' folder next to the exe",

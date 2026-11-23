@@ -1,13 +1,22 @@
 # Builds Release and packs the player download: dist\BlitzTheLeague-<version>-win64.zip
 # Contents: blitz.exe, the SDK DLLs, README.txt and licenses\. Never any game data.
 #
-# Usage: powershell -ExecutionPolicy Bypass -File tools\make_release.ps1 -Version 1.0.0 [-NoBuild]
+# The version is blitz/CMakeLists.txt project(VERSION): the exe shows it and its updater
+# compares it with GitHub's latest release, so bump it there. Keep the zip name ending in
+# -win64.zip: the updater looks for it.
+#
+# Usage: powershell -ExecutionPolicy Bypass -File tools\make_release.ps1 [-Version 1.1.0] [-NoBuild]
 param(
-  [Parameter(Mandatory = $true)][string]$Version,
+  [string]$Version,
   [switch]$NoBuild
 )
 $ErrorActionPreference = "Stop"
 $root = Split-Path $PSScriptRoot -Parent
+$cmakeVersion = [regex]::Match((Get-Content (Join-Path $root "blitz\CMakeLists.txt") -Raw),
+  'project\(\w+ VERSION ([0-9.]+)').Groups[1].Value
+if (-not $cmakeVersion) { throw "no project(... VERSION x.y.z) in blitz\CMakeLists.txt" }
+if (-not $Version) { $Version = $cmakeVersion }
+if ($Version -ne $cmakeVersion) { throw "-Version $Version differs from CMakeLists.txt's ${cmakeVersion}: bump it there" }
 $bin = Join-Path $root "blitz\out\build\win-amd64\Release"
 $sdk = Join-Path $root "deps\rexglue-sdk"
 $name = "BlitzTheLeague-$Version-win64"

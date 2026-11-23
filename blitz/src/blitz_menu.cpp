@@ -20,8 +20,10 @@
 #include <rex/settings_registry.h>
 #include <rex/ui/ui_system.h>
 
+#include "blitz_look.h"
 #include "blitz_settings.h"
 #include "blitz_ui.h"
+#include "blitz_updater.h"
 
 
 namespace blitz {
@@ -67,6 +69,7 @@ void Save() {
 // ------------------------------------------------------------------ rows
 enum Row {
   kStartGame,
+  kUpdates,
   kDisplayMode,
   kRenderRes,
   kAntiAlias,
@@ -87,7 +90,7 @@ enum Row {
 // kSharpen is left out until the sharpening pass exists (blitz.sharpen is saved
 // but nothing reads it yet).
 const std::vector<Row> kLauncherRows = {
-    kStartGame, kDisplayMode, kRenderRes,  kAntiAlias,  kFiltering, kVsync,
+    kStartGame, kUpdates, kDisplayMode, kRenderRes,  kAntiAlias,  kFiltering, kVsync,
     kAspect,    kVolume,      kMute,       kMuteUnfocused, kAudioBuffer, kFpsCounter,
     kLauncherAtStart, kQuit};
 const std::vector<Row> kInGameRows = {
@@ -139,6 +142,7 @@ int ScaleIndex() { return std::clamp(GetInt("gpu.resolution_scale_x"), 1, kMaxSc
 const char* Label(Row row) {
   switch (row) {
     case kStartGame: return "START GAME";
+    case kUpdates: return "Updates";
     case kDisplayMode: return "Display mode";
     case kRenderRes: return "Render resolution";
     case kAntiAlias: return "Anti-aliasing";
@@ -160,6 +164,21 @@ const char* Label(Row row) {
 
 const char* Note(Row row) {
   switch (row) {
+    case kUpdates: {
+      static std::string note;  // outlives this frame's call
+      switch (updater::GetState()) {
+        case updater::State::kAvailable:
+          note = "Enter: download " + updater::Latest() + " and restart. Settings, saves and the game stay.";
+          break;
+        case updater::State::kDownloading:
+        case updater::State::kInstalling: note = "Updating: the launcher restarts when it is done."; break;
+        case updater::State::kFailed: note = updater::Message() + ". Enter to try again."; break;
+        default:
+          note = GetBool("blitz.check_updates") ? "Checks GitHub for a newer release at startup. Enter checks now."
+                                                : "Off: no update checks. Enter checks once now.";
+      }
+      return note.c_str();
+    }
     case kStartGame: return "Start Blitz: The League with these settings.";
     case kDisplayMode: return "Borderless fullscreen or a window.";
     case kRenderRes: return "Internal resolution; above your screen it supersamples.";
@@ -182,6 +201,19 @@ const char* Note(Row row) {
 
 std::string Value(Row row) {
   switch (row) {
+    case kUpdates:
+      switch (updater::GetState()) {
+        case updater::State::kChecking: return "Checking...";
+        case updater::State::kUpToDate:
+          return std::string(GetBool("blitz.check_updates") ? "Up to date (" : "Off (up to date, ") +
+                 updater::Version() + ")";
+        case updater::State::kAvailable: return "Version " + updater::Latest() + " - install";
+        case updater::State::kDownloading: return "Downloading " + std::to_string(updater::Progress()) + "%";
+        case updater::State::kInstalling: return "Installing...";
+        case updater::State::kReady: return "Restarting...";
+        case updater::State::kFailed: return "Could not update - retry";
+        default: return GetBool("blitz.check_updates") ? "Check at startup" : "Off";
+      }
     case kDisplayMode: return GetBool("ui.fullscreen") ? "Fullscreen" : "Windowed";
     case kRenderRes: return kRenderLabels[ScaleIndex()];
     case kAntiAlias: return kAALabels[AAIndex()];
@@ -246,6 +278,7 @@ class BlitzMenu final : public rex::ui::IDialog {
 
     // ---- input
     int move = 0, activate = 0;
+    back_pressed_ = false;
     const double now = ImGui::GetTime();
     const InputState in = ReadInput();
     if (wait_release_) {
@@ -258,88 +291,121 @@ class BlitzMenu final : public rex::ui::IDialog {
       if (left_.Update(in.left, now)) activate = -1;
       if (right_.Update(in.right, now)) activate = 2;  // 2 = change only, never "choose"
       if (accept_.Update(in.accept, now, false)) activate = 1;
-      if (back_.Update(in.back, now, false) && !launcher_) keep_open = false;
+      back_pressed_ = back_.Update(in.back, now, false);
+      if (back_pressed_ && !launcher_ && !popup_) keep_open = false;
     }
-    if (move) {
+    if (move && !popup_) {
       sel_ = Wrap(sel_, move, n);
       quit_armed_ = false;
     }
 
     // ---- layout
+    look::EnsureFonts();
     ImGui::SetNextWindowPos(ImVec2(0, 0));
     ImGui::SetNextWindowSize(io.DisplaySize);
     ImGui::Begin("##blitz_menu", nullptr,
                  ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
                      ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBackground |
                      ImGuiWindowFlags_NoNav);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
     const float scale = std::max(0.6f, io.DisplaySize.y / 900.0f);
-    Painter p{ImGui::GetWindowDrawList(), ImGui::GetFont(), 24.0f * scale};
-    const float lh = p.size * 1.35f;
-    const float label_w = p.TextWidth("Launcher at startup") + p.TextWidth("MMM");
-    const float value_w = p.TextWidth("< 1x  1280x720 (original) >  *") + p.TextWidth("MM");
-    const float hint_w = p.TextWidth(kHint, 0.75f) + 40 * scale;
-    const float pw = std::max(label_w + value_w, hint_w) + 40 * scale;
-    const float title_h = launcher_ ? lh * 2.6f : lh * 1.4f;
-    const float ph = title_h + (static_cast<float>(n) + 3.4f) * lh;
-    const float px = (io.DisplaySize.x - pw) / 2, py = (io.DisplaySize.y - ph) / 2;
-    const float value_x = px + 20 * scale + label_w;
+    Painter p{dl, look::Body() ? look::Body() : ImGui::GetFont(), 24.0f * scale};
+    const float lh = p.size * 1.32f;
+    const float label_w = p.TextWidth("Launcher at startup") + p.TextWidth("MMMM");
+    const float value_w = p.TextWidth("< Off (up to date, 1.10.10) >  *") + p.TextWidth("MM");
+    const float hint_w = p.TextWidth(kHint, 0.75f) + 60 * scale;
+    const float pw = std::max(label_w + value_w, hint_w) + 60 * scale;
+    const float title_h = launcher_ ? 150 * scale : 78 * scale;
+    const float ph = title_h + (static_cast<float>(n) + 2.9f) * lh;
+    const float px = (io.DisplaySize.x - pw) / 2;
+    const float py = std::max(8 * scale, (io.DisplaySize.y - ph) / 2);
+    const float value_x = px + 34 * scale + label_w;
 
     if (launcher_) {
-      // Nothing is running behind the launcher yet: draw a full backdrop.
-      p.Rect(0, 0, io.DisplaySize.x, io.DisplaySize.y, kBackdrop);
+      // Nothing is running behind the launcher yet: draw the whole scene.
+      look::Backdrop(dl, io.DisplaySize, static_cast<float>(now), scale);
     } else {
       p.Rect(0, 0, io.DisplaySize.x, io.DisplaySize.y, kShade);
     }
-    p.Rect(px, py, pw, ph, kPanel);
-    p.Rect(px, py, pw, 3 * scale, kAccent);
-    if (launcher_) {
-      p.Text(px + 20 * scale, py + 12 * scale, "BLITZ: THE LEAGUE", kAccent, 1.6f);
-      p.Text(px + 20 * scale, py + 12 * scale + lh * 1.45f, "Native PC recompilation  -  launcher",
-             kGrey, 0.8f);
-    } else {
-      p.Text(px + 20 * scale, py + 14 * scale, "BLITZ: THE LEAGUE  -  OPTIONS", kAccent);
+    look::Panel(dl, ImVec2(px, py), ImVec2(px + pw, py + ph), scale);
+    look::Title(dl, px + pw / 2, py + (launcher_ ? 14 : 12) * scale, scale, launcher_ ? 0.9f : 0.45f);
+
+    // a newer release: the popup takes the input until answered
+    const updater::State ust = updater::GetState();
+    if (launcher_ && ust == updater::State::kAvailable && !offered_) {
+      offered_ = true;
+      popup_ = true;
+      popup_sel_ = 0;
+    }
+    if (popup_) {
+      if (activate == -1) popup_sel_ = 0;
+      if (activate == 2) popup_sel_ = 1;
     }
 
-    float y = py + 14 * scale + title_h;
+    float y = py + title_h;
     for (int i = 0; i < n; i++) {
       const Row row = rows_[i];
-      const float rx = px + 8 * scale, rw = pw - 16 * scale, ry = y - 4 * scale;
-      if (ImGui::IsMouseHoveringRect(ImVec2(rx, ry), ImVec2(rx + rw, ry + lh)) &&
-          (io.MouseDelta.x != 0 || io.MouseDelta.y != 0)) {
-        if (sel_ != i) quit_armed_ = false;
-        sel_ = i;
+      const float rx = px + 22 * scale, rw = pw - 44 * scale, ry = y - 4 * scale;
+      if (!popup_) {
+        if (ImGui::IsMouseHoveringRect(ImVec2(rx, ry), ImVec2(rx + rw, ry + lh)) &&
+            (io.MouseDelta.x != 0 || io.MouseDelta.y != 0)) {
+          if (sel_ != i) quit_armed_ = false;
+          sel_ = i;
+        }
+        if (RowClicked(rx, ry, rw, lh, ImGuiMouseButton_Left)) { sel_ = i; activate = 1; }
+        if (RowClicked(rx, ry, rw, lh, ImGuiMouseButton_Right)) { sel_ = i; activate = -1; }
       }
-      if (RowClicked(rx, ry, rw, lh, ImGuiMouseButton_Left)) { sel_ = i; activate = 1; }
-      if (RowClicked(rx, ry, rw, lh, ImGuiMouseButton_Right)) { sel_ = i; activate = -1; }
 
-      if (i == sel_) p.Rect(rx, ry, rw, lh, kHighlight);
-      const ImU32 label_col = row == kStartGame ? kAccent : (i == sel_ ? kWhite : kGrey);
-      p.Text(px + 20 * scale, y, Label(row), i == sel_ ? kWhite : label_col);
+      ImU32 text_col = row == kStartGame ? look::Game().accent : look::Game().dim;
+      if (i == sel_) text_col = look::Selected(dl, ImVec2(rx, ry), ImVec2(rx + rw, ry + lh), scale);
+      p.Text(px + 34 * scale, y, Label(row), text_col);
       if (IsOptionRow(row)) {
         std::string v = "< " + Value(row) + " >";
         if (const char* rs = RestartSetting(row); rs && RestartPending(rs)) v += "  *";
-        p.Text(value_x, y, v.c_str(), kWhite);
+        ImU32 vc = i == sel_ ? text_col : look::Game().text;
+        if (row == kUpdates && i != sel_ && (ust == updater::State::kAvailable || ust == updater::State::kFailed))
+          vc = look::Game().accent;
+        p.Text(value_x, y, v.c_str(), vc);
       } else if (row == kQuit && i == sel_ && quit_armed_) {
-        p.Text(value_x, y, "press again to quit", kAccent);
+        p.Text(value_x, y, "press again to quit", text_col);
       }
       y += lh;
-      if (row == kStartGame) y += lh * 0.35f;  // gap under Start game
+      if (row == kStartGame) y += lh * 0.3f;  // gap under Start game
     }
 
     // ---- act
+    if (popup_) {
+      if (activate == 1) {
+        if (popup_sel_ == 0) updater::StartInstall();
+        popup_ = false;
+        wait_release_ = true;
+      } else if (back_pressed_) {
+        popup_ = false;
+        wait_release_ = true;
+      }
+      activate = 0;
+    }
     if (activate != 0) {
       const Row row = rows_[sel_];
-      if (IsOptionRow(row)) {
+      if (row == kUpdates && activate == 1) {
+        const updater::State st = updater::GetState();
+        if (st == updater::State::kAvailable || (st == updater::State::kFailed && !updater::Latest().empty()))
+          updater::StartInstall();
+        else if (st != updater::State::kChecking && !updater::Busy())
+          updater::StartCheck();
+      } else if (IsOptionRow(row)) {
         Change(row, activate > 0 ? 1 : -1);
       } else if (activate == 1) {
         switch (row) {
           case kStartGame:
+            if (updater::Busy()) break;  // the update may replace files the game needs
             Save();
             launcher_->store(LauncherChoice::kStart);
             keep_open = false;
             break;
           case kCloseMenu: keep_open = false; break;
           case kQuit:
+            if (updater::GetState() == updater::State::kInstalling) break;  // let it finish
             if (quit_armed_ || launcher_) {
               if (launcher_) launcher_->store(LauncherChoice::kQuit);
               rex::app::RequestShutdown(0);
@@ -352,15 +418,64 @@ class BlitzMenu final : public rex::ui::IDialog {
         }
       }
     }
+    // the update is in place: the new version starts, this one goes
+    if (launcher_ && keep_open && updater::GetState() == updater::State::kReady) {
+      Save();
+      launcher_->store(LauncherChoice::kUpdated);
+      keep_open = false;
+    }
 
     const char* note = Note(rows_[sel_]);
     std::string bottom = !status_.empty() ? status_ : (note ? std::string(note) : std::string());
     if (bottom.empty() && rows_[sel_] == kQuit) bottom = launcher_ ? "Exit without playing." : "Exit the game.";
-    p.Text(px + 20 * scale, y + lh * 0.4f, bottom.c_str(), status_.empty() ? kGrey : kAccent, 0.75f);
+    if (rows_[sel_] == kStartGame && updater::Busy()) bottom = "Wait for the update to finish.";
+    const ImU32 hint = look::Game().hint;
+    dl->AddLine(ImVec2(px + 30 * scale, y + lh * 0.15f), ImVec2(px + pw - 30 * scale, y + lh * 0.15f),
+                IM_COL32(200, 210, 215, 40), 1.0f);
+    p.Text(px + 34 * scale, y + lh * 0.4f, bottom.c_str(), status_.empty() ? hint : look::Game().accent, 0.78f);
     const char* close_hint = launcher_ ? kHint : "F1 / Esc / B / Guide: close.   * = after restart";
-    p.Text(px + 20 * scale, y + lh * 1.3f, close_hint, kGrey, 0.75f);
+    p.Text(px + 34 * scale, y + lh * 1.3f, close_hint, hint, 0.75f);
+    const std::string ver = std::string("v") + updater::Version();
+    p.Text(px + pw - 34 * scale - p.TextWidth(ver.c_str(), 0.75f), y + lh * 1.3f, ver.c_str(), hint, 0.75f);
+    if (popup_) DrawPopup(dl, io, p, scale);
     ImGui::End();
     return keep_open;
+  }
+
+  // "VERSION x IS OUT": Update now / Later
+  void DrawPopup(ImDrawList* dl, ImGuiIO& io, const Painter& p, float scale) {
+    dl->AddRectFilled(ImVec2(0, 0), io.DisplaySize, IM_COL32(0, 0, 0, 160));
+    std::string what = updater::Message();
+    if (const size_t c = what.find(": "); c != std::string::npos && c < 12) what = what.substr(c + 2);
+    const std::string head = "VERSION " + updater::Latest() + " IS OUT";
+    const std::string line1 = std::string("You have ") + updater::Version() + (what.empty() ? "." : ".  New: " + what);
+    const char* line2 = "Update now downloads it and restarts. Settings, saves and the game stay.";
+    const float pw = std::max({p.TextWidth(line1.c_str(), 0.85f), p.TextWidth(line2, 0.85f), 560 * scale}) + 80 * scale;
+    const float ph = 250 * scale;
+    const ImVec2 p0((io.DisplaySize.x - pw) / 2, (io.DisplaySize.y - ph) / 2), p1(p0.x + pw, p0.y + ph);
+    look::Panel(dl, p0, p1, scale);
+    ImFont* heavy = look::Heavy() ? look::Heavy() : ImGui::GetFont();
+    const float hs = 44 * scale, cx = (p0.x + p1.x) / 2;
+    look::Outlined(dl, heavy, hs,
+                   ImVec2(cx - heavy->CalcTextSizeA(hs, FLT_MAX, 0, head.c_str()).x / 2, p0.y + 26 * scale),
+                   look::Game().accent, head.c_str(), 2.5f * scale);
+    p.Text(cx - p.TextWidth(line1.c_str(), 0.85f) / 2, p0.y + 92 * scale, line1.c_str(), look::Game().text, 0.85f);
+    p.Text(cx - p.TextWidth(line2, 0.85f) / 2, p0.y + 124 * scale, line2, look::Game().dim, 0.85f);
+    const char* labels[2] = {"UPDATE NOW", "LATER"};
+    const float bw = 210 * scale, bh = 48 * scale, gap = 40 * scale, by = p1.y - 76 * scale;
+    for (int i = 0; i < 2; i++) {
+      const ImVec2 a(cx - bw - gap / 2 + i * (bw + gap), by), b(a.x + bw, by + bh);
+      if (ImGui::IsMouseHoveringRect(a, b) && (io.MouseDelta.x != 0 || io.MouseDelta.y != 0)) popup_sel_ = i;
+      if (RowClicked(a.x, a.y, bw, bh, ImGuiMouseButton_Left)) {
+        if (i == 0) updater::StartInstall();
+        popup_ = false;
+        wait_release_ = true;
+      }
+      ImU32 col = look::Game().dim;
+      if (i == popup_sel_) col = look::Selected(dl, a, b, scale);
+      else dl->AddRect(a, b, IM_COL32(200, 210, 215, 70), 0, 0, std::max(1.0f, scale));
+      p.Text(a.x + (bw - p.TextWidth(labels[i])) / 2, by + (bh - p.size) / 2, labels[i], col);
+    }
   }
 
  private:
@@ -408,6 +523,12 @@ class BlitzMenu final : public rex::ui::IDialog {
         break;
       }
       case kLauncherAtStart: SetBool("blitz.launcher", !GetBool("blitz.launcher")); break;
+      case kUpdates: {
+        const bool on = !GetBool("blitz.check_updates");
+        SetBool("blitz.check_updates", on);
+        if (on && updater::GetState() == updater::State::kIdle) updater::StartCheck();
+        break;
+      }
       default: return;
     }
     if (const char* rs = RestartSetting(row); rs && RestartPending(rs)) {
@@ -423,6 +544,10 @@ class BlitzMenu final : public rex::ui::IDialog {
   int sel_ = 0;
   bool quit_armed_ = false;
   bool wait_release_ = true;
+  bool back_pressed_ = false;
+  bool offered_ = false;  // the update popup was shown for the release found
+  bool popup_ = false;
+  int popup_sel_ = 0;     // 0 Update now, 1 Later
   std::string status_;
   Repeater up_, down_, left_, right_, accept_, back_;
 };

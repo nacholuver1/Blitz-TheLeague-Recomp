@@ -29,7 +29,7 @@ copy of the game.
 4. The launcher opens: pick settings, then **START GAME**.
 
 The player README ([release/README.txt](release/README.txt)) covers controls, settings
-and command-line flags (`--blitz.iso=`, `--title.game_root=`, `--blitz.launcher=false`,
+and command-line flags (`--blitz.iso=`, `--title.game_root=`, `--blitz.launcher=false`, `--blitz.check_updates=false`,
 `--ui.fullscreen=`, `--gpu.driver=vulkan`, and any `--section.name=value` from `blitz.toml`).
 
 Everything (game files, saves, settings, shader cache, logs) lives in the exe's folder.
@@ -111,6 +111,8 @@ the places where a straight translation behaves differently from a real Xbox 360
 | [blitz/src/main.cpp](blitz/src/main.cpp) | App entry. GPU defaults the game needs: resolve readback (the game renders helmets and sideline crowds on the GPU, then processes them on the CPU) and synchronous shader compilation (the custom-team helmet logo is baked by a one-shot draw that async compilation skipped). Game-folder discovery. |
 | [blitz/src/blitz_setup.cpp](blitz/src/blitz_setup.cpp) | First-run setup: XDVDFS disc-image unpacker, XEX title-ID / hash check, setup screen. |
 | [blitz/src/blitz_menu.cpp](blitz/src/blitz_menu.cpp) | Pre-game launcher and in-game options menu (F1 / Guide / LB+RB+Back). |
+| [blitz/src/blitz_look.cpp](blitz/src/blitz_look.cpp) | The menus' look, after the game's own menus (scene and colours in `blitz_palette.h`): all drawn, no game art; Impact / Bahnschrift from Windows, DejaVu / Liberation on Linux. |
+| [blitz/src/blitz_updater.cpp](blitz/src/blitz_updater.cpp) | Updates from GitHub releases: the launcher checks `releases/latest`, a newer release opens an Update now / Later popup, the package must match GitHub's SHA-256 digest, files are swapped with `.old` backups (rolled back on failure; `*.toml`, `game`, `user`, `cache`, `logs` never touched) and the new version restarts. WinHTTP + `tar.exe` on Windows, `curl` + `tar` on Linux. The version is `project(VERSION)` in `blitz/CMakeLists.txt`; `BLITZ_UPDATE_URL` points it at a test server. |
 | [blitz/src/blitz_fp_guard.h](blitz/src/blitz_fp_guard.h), [blitz_crash_dump.h](blitz/src/blitz_crash_dump.h) | Masks host SSE floating-point exceptions; writes minidumps to `crashes\`. |
 | [patches/](patches/) | SDK patches: `dcbz` clears a 128-byte cache line on Xenon (the codegen cleared 32), and extra audio-stream diagnostics in the log. `rexglue-cs-debug-trace.patch` is an optional contended-lock tracer used to find the boot deadlock. |
 | [tools/](tools/) | Build scripts (Windows and Linux), release packers, ISO extractor, XEX header dump, and the debugging helpers used along the way (guest memory peek, LLDB probe, thread stack dump, screenshot automation). |

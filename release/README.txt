@@ -41,10 +41,18 @@ Settings
   resolution is very heavy; the game runs in slow motion if your GPU can't
   keep up, because the game logic runs per frame.
 
+Updates
+  The launcher asks GitHub for a newer release when it opens. When there is
+  one, a popup offers UPDATE NOW or LATER: Update now downloads it, checks it
+  against the checksum GitHub lists, puts the new files in place and
+  restarts. Your settings, saves (user\) and game files (game\) stay. The
+  Updates row shows the status; Left/Right turns the check off.
+
 Command-line options (every setting in blitz.toml works as --section.name=value)
   --blitz.iso=PATH            set up from this disc image without the menu
   --title.game_root=PATH      play from this extracted game folder
   --blitz.launcher=false      skip the launcher and start the game directly
+  --blitz.check_updates=false no update check this time
   --ui.fullscreen=true|false  fullscreen or windowed
   --gpu.driver=vulkan         use Vulkan instead of Direct3D 12 (Linux always
                               uses Vulkan)
@@ -59,7 +67,8 @@ Everything stays in this folder
   cache\     compiled shaders (safe to delete; rebuilt on first use)
   logs\      a log of each run
   crashes\   crash dumps, if it ever crashes
-  Delete the folder and it's all gone. When updating, copy the new blitz.exe
+  Delete the folder and it's all gone. The launcher updates in place; to
+  update by hand, copy the new blitz.exe
   and DLLs over the old ones; keep game\, user\ and blitz.toml.
 
 Known issues

@@ -12,6 +12,7 @@
 #include "blitz_menu.h"
 #include "blitz_settings.h"
 #include "blitz_setup.h"
+#include "blitz_updater.h"
 #include "generated/default/blitz_init.h"
 
 #include <atomic>
@@ -20,6 +21,7 @@
 
 #include <rex/path_settings.h>
 #include <rex/platform/file.h>
+#include <rex/platform/process.h>
 
 #ifdef _WIN32
 #include <Windows.h>
@@ -153,6 +155,7 @@ class BlitzApp : public rex::app::TitleApp {
   // Returns false when the game should not be launched in this process.
   bool RunLauncher() {
     if (!blitz::Settings().launcher.Get()) return true;
+    if (blitz::Settings().check_updates.Get()) blitz::updater::StartCheck();
     std::atomic<blitz::LauncherChoice> choice{blitz::LauncherChoice::kPending};
     auto launcher = blitz::MakeLauncher(GetUI(), choice);
     {
@@ -160,6 +163,14 @@ class BlitzApp : public rex::app::TitleApp {
       launcher->OnShow();
       while (choice.load() == blitz::LauncherChoice::kPending && RunFrame()) {
       }
+    }
+    if (choice.load() == blitz::LauncherChoice::kUpdated) {
+      // the new version is in place: start it and close this one
+      if (!blitz::updater::Relaunch()) {
+        rex::ShowMessageBox(rex::MessageType::kInfo,
+                            "The update is installed. Start the game again to play the new version.");
+      }
+      return false;
     }
     if (choice.load() != blitz::LauncherChoice::kStart) return false;
     if (blitz::AnyRestartPending()) {
@@ -245,12 +256,18 @@ class BlitzApp : public rex::app::TitleApp {
 namespace {
 
 int BlitzMain(BlitzApp& app, const rex::CLIArgList& args) {
+  // before anything else: what the last update left is deleted, and the exe's
+  // path is kept for an update's relaunch (on Linux the running file is renamed)
+  blitz::updater::Init(rex::platform::GetExecutablePath(), args.GetAll());
   if (app.Init(args)) {
     if (app.RunSetup() && app.RunLauncher() && app.LaunchTitle()) {
       app.StartInGameMenu();
       app.Run();
     }
   }
+  // the launcher's window was closed while an update replaced files: let it finish (a download is
+  // simply dropped, an interrupted swap would leave a mix of versions)
+  blitz::updater::WaitForInstall();
   return app.Shutdown();
 }
 

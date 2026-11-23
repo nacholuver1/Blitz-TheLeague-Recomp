@@ -26,7 +26,8 @@ namespace blitz {
 
 inline constexpr const char* kMenuOverlayName = "blitz_menu";
 
-enum class LauncherChoice : int { kPending = 0, kStart = 1, kQuit = 2 };
+// kUpdated: an update is in place; the new version starts and this one quits.
+enum class LauncherChoice : int { kPending = 0, kStart = 1, kQuit = 2, kUpdated = 3 };
 
 // In-game overlay factory for IUISystem::AddOverlays.
 std::unique_ptr<rex::ui::IDialog> MakeMenu(rex::ui::IUISystem& ui);
