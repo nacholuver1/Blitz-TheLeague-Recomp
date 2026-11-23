@@ -61,6 +61,9 @@ class BlitzApp : public rex::app::TitleApp {
     // Keep compiled shaders between runs (the SDK keeps none by default). With
     // synchronous compilation this removes the first-time hitches on later runs.
     DefaultSetting("app.cache_root", "{app.root}/cache");
+    // Hide the mouse cursor after 2 s without movement (the SDK default never
+    // hides it, so it sat over the game). Moving the mouse brings it back.
+    DefaultSetting("ui.cursor_timeout", "2");
     // The SDK writes app.root into blitz.toml. Lock it to the exe's folder so
     // a moved or renamed game folder keeps its saves/cache/logs with it.
     if (auto r = settings.SetText(rex::SettingLayer::kLock, "app.root",
