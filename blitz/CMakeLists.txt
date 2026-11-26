@@ -5,7 +5,7 @@
 cmake_minimum_required(VERSION 3.25)
 # The release version: shown in the launcher and compared with GitHub's latest
 # release by the updater (src/blitz_updater.cpp); tools/make_release*.ps1/sh pack it.
-project(blitz VERSION 1.1.1 LANGUAGES CXX)
+project(blitz VERSION 1.2.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
