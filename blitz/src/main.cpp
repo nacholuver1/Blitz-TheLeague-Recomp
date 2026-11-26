@@ -18,6 +18,7 @@
 #include <atomic>
 #include <cstdlib>
 #include <filesystem>
+#include <string_view>
 
 #include <rex/path_settings.h>
 #include <rex/platform/file.h>
@@ -119,18 +120,32 @@ class BlitzApp : public rex::app::TitleApp {
     std::string current;
     if (auto s = registry.Find("title.game_root"); s && *s) current = (*s)->GetText();
     std::string problem;
-    if (!current.empty()) {
+    std::error_code ec;
+    // --blitz.game (what launchers pass): an extracted folder is played as it is;
+    // a disc image is unpacked like --blitz.iso unless a game folder is set up
+    // (launchers pass it on every start, and every folder that passes the check
+    // holds the same verified build, so it is not unpacked again).
+    fs::path iso = blitz::Settings().iso.Get();
+    const fs::path game = blitz::Settings().game.Get();
+    const bool game_folder = !game.empty() && fs::is_directory(game, ec);
+    if (game_folder) {
+      problem = blitz::CheckGameFolder(game);
+      if (problem.empty()) return UseGameRoot(game, current);
+      REXLOG_WARN("blitz: --blitz.game folder '{}': {}", game.generic_string(), problem);
+    } else if (!game.empty()) {
+      iso = game;
+    }
+    if (!game_folder && !current.empty()) {
       problem = blitz::CheckGameFolder(current);
       if (problem.empty()) return true;
       REXLOG_WARN("blitz: game folder '{}': {}", current, problem);
-      std::error_code ec;
       // A folder that simply isn't there needs no explanation on the setup screen.
       if (!fs::is_regular_file(fs::path(current) / "default.xex", ec)) problem.clear();
     }
 
     std::atomic<blitz::SetupChoice> choice{blitz::SetupChoice::kPending};
     fs::path root;
-    auto setup = blitz::MakeSetup(choice, root, blitz::Settings().iso.Get(), problem);
+    auto setup = blitz::MakeSetup(choice, root, iso, problem);
     {
       auto guard = GetUI().AddDialog(*setup);
       setup->OnShow();
@@ -138,6 +153,13 @@ class BlitzApp : public rex::app::TitleApp {
       }
     }
     if (choice.load() != blitz::SetupChoice::kDone) return false;
+    return UseGameRoot(root, current);
+  }
+
+  // Plays from `root` and saves it as title.game_root (unless it already is).
+  bool UseGameRoot(const std::filesystem::path& root, const std::string& current) {
+    auto& registry = rex::GetSettingsRegistry();
+    if (root.generic_string() == current) return true;
     REXLOG_INFO("blitz: game folder set to '{}'", root.generic_string());
     if (auto r = registry.SetText(rex::SettingLayer::kRuntime, "title.game_root",
                                   root.generic_string());
@@ -154,8 +176,12 @@ class BlitzApp : public rex::app::TitleApp {
   // Shows the launcher until the player starts the game or quits.
   // Returns false when the game should not be launched in this process.
   bool RunLauncher() {
-    if (!blitz::Settings().launcher.Get()) return true;
-    if (blitz::Settings().check_updates.Get()) blitz::updater::StartCheck();
+    // --blitz.game comes from a launcher or shortcut that already chose the settings
+    if (!blitz::Settings().launcher.Get() || !blitz::Settings().game.Get().empty()) return true;
+    // RecompLauncher installs updates itself: never check from inside it
+    const char* rl = std::getenv("RECOMPLAUNCHER");
+    const bool from_recomplauncher = rl && std::string_view(rl) == "1";
+    if (blitz::Settings().check_updates.Get() && !from_recomplauncher) blitz::updater::StartCheck();
     std::atomic<blitz::LauncherChoice> choice{blitz::LauncherChoice::kPending};
     auto launcher = blitz::MakeLauncher(GetUI(), choice);
     {

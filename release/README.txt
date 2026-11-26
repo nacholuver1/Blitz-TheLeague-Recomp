@@ -49,6 +49,8 @@ Updates
   Updates row shows the status; Left/Right turns the check off.
 
 Command-line options (every setting in blitz.toml works as --section.name=value)
+  --blitz.game=PATH           your disc image or extracted folder; starts the
+                              game directly (what RecompLauncher passes)
   --blitz.iso=PATH            set up from this disc image without the menu
   --title.game_root=PATH      play from this extracted game folder
   --blitz.launcher=false      skip the launcher and start the game directly

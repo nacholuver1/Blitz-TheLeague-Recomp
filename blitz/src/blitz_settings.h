@@ -22,6 +22,10 @@ class BlitzSettings : public rex::SettingOwner {
               "Disc image to set up from on first run (--blitz.iso=path); unpacked into a "
               "'game' folder next to the exe",
               rex::kNoSave);
+  REX_SETTING(std::filesystem::path, game, "",
+              "Your copy of the game, a disc image or an extracted folder (--blitz.game=path), "
+              "started without the launcher menu; for launchers and shortcuts",
+              rex::kNoSave);
   REX_SETTING(f64, sharpen, 0.0, "Output sharpening strength, 0 is off", rex::Range{0.0, 1.0});
 };
 

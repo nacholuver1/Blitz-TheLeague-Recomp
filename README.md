@@ -29,7 +29,7 @@ copy of the game.
 4. The launcher opens: pick settings, then **START GAME**.
 
 The player README ([release/README.txt](release/README.txt)) covers controls, settings
-and command-line flags (`--blitz.iso=`, `--title.game_root=`, `--blitz.launcher=false`, `--blitz.check_updates=false`,
+and command-line flags (`--blitz.game=` (a disc image or extracted folder, started without the launcher menu), `--blitz.iso=`, `--title.game_root=`, `--blitz.launcher=false`, `--blitz.check_updates=false`,
 `--ui.fullscreen=`, `--gpu.driver=vulkan`, and any `--section.name=value` from `blitz.toml`).
 
 Everything (game files, saves, settings, shader cache, logs) lives in the exe's folder.
