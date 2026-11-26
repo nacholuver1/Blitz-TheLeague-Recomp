@@ -24,6 +24,8 @@ cp "$BIN/blitz" "$STAGE/"
 # Shared libraries next to the binary; the SDK sets RPATH=$ORIGIN.
 find "$BIN" -maxdepth 1 \( -name '*.so' -o -name '*.so.*' \) -exec cp -P {} "$STAGE/" \;
 cp "$ROOT/release/README.txt" "$STAGE/"
+# RecompLauncher reads this next to the binary (Easy Setup, settings)
+cp "$ROOT/recomplauncher.json" "$STAGE/"
 
 cp "$ROOT/LICENSE" "$STAGE/licenses/blitz-recomp.txt"
 cp "$ROOT/THIRD_PARTY_NOTICES.md" "$STAGE/licenses/"

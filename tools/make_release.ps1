@@ -39,6 +39,8 @@ New-Item -ItemType Directory -Force $stage | Out-Null
 Copy-Item (Join-Path $bin "blitz.exe") $stage
 Get-ChildItem $bin -Filter *.dll | Copy-Item -Destination $stage
 Copy-Item (Join-Path $root "release\README.txt") $stage
+# RecompLauncher reads this next to the exe (Easy Setup, settings): docs/ADD-SUPPORT.md upstream
+Copy-Item (Join-Path $root "recomplauncher.json") $stage
 
 # Licenses: this project, the SDK (covers Xenia), and every SDK third-party library.
 $lic = Join-Path $stage "licenses"

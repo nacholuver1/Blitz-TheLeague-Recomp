@@ -1,0 +1,151 @@
+{
+  "$schema": "https://recomplauncher.com/schema/recomplauncher.json",
+  "format": 1,
+  "name": "Blitz: The League Recomp",
+  "repo": "nacholuver1/Blitz-TheLeague-Recomp",
+  "inputs": [
+    {
+      "id": "game",
+      "label": "Your copy of Blitz: The League for Xbox 360 (USA / Europe disc): its disc image (.iso), or its extracted folder with default.xex. A disc image is unpacked into the game's folder on the first start (about 6.3 GB, one time only).",
+      "formats": [{ "type": "file", "extensions": ["iso"] }, { "type": "folder" }],
+      "check": { "ids": ["4D5707D4"] },
+      "dumps": [
+        { "name": "USA, Europe", "size": 7834892288, "crc32": "faeea810" }
+      ]
+    }
+  ],
+  "start": {
+    "program": ["blitz.exe", "blitz"],
+    "args": ["--blitz.game={input:game}"]
+  },
+  "system": {
+    "windows": { "version": "10" },
+    "linux": { "glibc": "2.38" }
+  },
+  "config": [
+    {
+      "id": "main",
+      "format": "toml",
+      "file": [{ "path": "{install}/blitz.toml" }]
+    }
+  ],
+  "saves": ["{install}/user"],
+  "folders": {
+    "saves": [{ "path": "{install}/user" }],
+    "logs": [{ "path": "{install}/logs" }],
+    "cache": [{ "path": "{install}/cache" }]
+  },
+  "settings": [
+    {
+      "id": "display", "label": "Display mode", "group": "Video",
+      "help": "Borderless fullscreen or a window.",
+      "choices": [
+        { "label": "Fullscreen", "set": { "ui/fullscreen": "true" } },
+        { "label": "Windowed", "set": { "ui/fullscreen": "false" } }
+      ],
+      "defaults": { "ui/fullscreen": "true" }
+    },
+    {
+      "id": "resolution", "label": "Render resolution", "group": "Video",
+      "help": "What the game draws at. 1x (720p) is the console's own; above your screen it supersamples.",
+      "choices": [
+        { "label": "1x 1280x720 (original)", "set": { "gpu/resolution_scale_x": "1", "gpu/resolution_scale_y": "1" } },
+        { "label": "2x 2560x1440", "set": { "gpu/resolution_scale_x": "2", "gpu/resolution_scale_y": "2" } },
+        { "label": "3x 3840x2160", "set": { "gpu/resolution_scale_x": "3", "gpu/resolution_scale_y": "3" } },
+        { "label": "4x 5120x2880", "set": { "gpu/resolution_scale_x": "4", "gpu/resolution_scale_y": "4" } }
+      ],
+      "defaults": { "gpu/resolution_scale_x": "1", "gpu/resolution_scale_y": "1" }
+    },
+    {
+      "id": "aa", "label": "Anti-aliasing", "group": "Video",
+      "help": "FXAA smooths jagged edges.",
+      "choices": [
+        { "label": "Off", "set": { "gpu.xenos/swap_post_effect": "\"none\"" } },
+        { "label": "FXAA", "set": { "gpu.xenos/swap_post_effect": "\"fxaa\"" } },
+        { "label": "FXAA (extreme)", "set": { "gpu.xenos/swap_post_effect": "\"fxaa_extreme\"" } }
+      ],
+      "defaults": { "gpu.xenos/swap_post_effect": "\"none\"" }
+    },
+    {
+      "id": "filtering", "label": "Texture filtering", "group": "Video",
+      "help": "Anisotropic filtering: sharper textures at an angle.",
+      "choices": [
+        { "label": "Game default", "set": { "gpu/anisotropic_override": "-1" } },
+        { "label": "Off", "set": { "gpu/anisotropic_override": "0" } },
+        { "label": "2x", "set": { "gpu/anisotropic_override": "2" } },
+        { "label": "4x", "set": { "gpu/anisotropic_override": "3" } },
+        { "label": "8x", "set": { "gpu/anisotropic_override": "4" } },
+        { "label": "16x", "set": { "gpu/anisotropic_override": "5" } }
+      ],
+      "defaults": { "gpu/anisotropic_override": "3" }
+    },
+    {
+      "id": "vsync", "label": "VSync", "group": "Video",
+      "help": "Waits for the monitor's refresh. The game's speed follows its frame rate, so keep it on.",
+      "choices": [
+        { "label": "On", "set": { "gpu/vsync": "true" } },
+        { "label": "Off", "set": { "gpu/vsync": "false" } }
+      ],
+      "defaults": { "gpu/vsync": "true" }
+    },
+    {
+      "id": "aspect", "label": "Aspect ratio", "group": "Video",
+      "help": "Keep the game's shape with bars, or stretch it to the window.",
+      "choices": [
+        { "label": "Keep shape", "set": { "gpu.xenos/present_letterbox": "true" } },
+        { "label": "Stretch", "set": { "gpu.xenos/present_letterbox": "false" } }
+      ],
+      "defaults": { "gpu.xenos/present_letterbox": "true" }
+    },
+    {
+      "id": "fps", "label": "FPS counter", "group": "Video",
+      "help": "The frame rate in the corner of the game (F3 also toggles it).",
+      "choices": [
+        { "label": "Off", "set": { "blitz/show_fps": "false" } },
+        { "label": "On", "set": { "blitz/show_fps": "true" } }
+      ],
+      "defaults": { "blitz/show_fps": "false" }
+    },
+    {
+      "id": "volume", "label": "Volume", "group": "Audio",
+      "help": "Master volume: 1 is the game's own level.",
+      "slider": { "key": "apu/gain", "min": 0, "max": 2, "step": 0.1, "format": "%.1f" },
+      "defaults": { "apu/gain": "1.0" }
+    },
+    {
+      "id": "mute", "label": "Mute", "group": "Audio",
+      "help": "Silences all game audio.",
+      "choices": [
+        { "label": "Off", "set": { "apu/mute": "false" } },
+        { "label": "On", "set": { "apu/mute": "true" } }
+      ],
+      "defaults": { "apu/mute": "false" }
+    },
+    {
+      "id": "mute_unfocused", "label": "Mute in background", "group": "Audio",
+      "help": "Silences the game while its window is in the background.",
+      "choices": [
+        { "label": "Off", "set": { "apu/mute_unfocused": "false" } },
+        { "label": "On", "set": { "apu/mute_unfocused": "true" } }
+      ],
+      "defaults": { "apu/mute_unfocused": "false" }
+    },
+    {
+      "id": "audio_buffer", "label": "Audio buffer", "group": "Audio",
+      "help": "Bigger fixes crackles, smaller has less delay.",
+      "advanced": true,
+      "choices": [
+        { "label": "Small (8)", "set": { "apu/max_queued_frames": "8" } },
+        { "label": "Medium (16)", "set": { "apu/max_queued_frames": "16" } },
+        { "label": "Large (32)", "set": { "apu/max_queued_frames": "32" } },
+        { "label": "Max (64)", "set": { "apu/max_queued_frames": "64" } }
+      ],
+      "defaults": { "apu/max_queued_frames": "8" }
+    }
+  ],
+  "actions": [
+    { "id": "saves", "label": "Saves", "help": "Your profile and campaign saves.", "open": "saves" },
+    { "id": "logs", "label": "Logs", "help": "The game's log files, for bug reports.", "open": "logs" },
+    { "id": "cache", "label": "Shader cache", "help": "Shaders the game has built, so later starts don't stutter. Clearing only helps if graphics look wrong after an update.", "clear": "cache" }
+  ]
+}
