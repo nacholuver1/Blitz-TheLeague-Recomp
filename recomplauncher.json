@@ -67,6 +67,16 @@
       "defaults": { "gpu.xenos/swap_post_effect": "\"none\"" }
     },
     {
+      "id": "upscaling", "label": "Upscaling", "group": "Video",
+      "help": "How the picture is scaled to your screen. AMD FSR 1 is sharpest at 1x render resolution on a big screen; CAS only sharpens.",
+      "choices": [
+        { "label": "Off", "set": { "gpu.xenos/present_effect": "\"bilinear\"" } },
+        { "label": "AMD FSR 1", "set": { "gpu.xenos/present_effect": "\"fsr\"" } },
+        { "label": "AMD CAS", "set": { "gpu.xenos/present_effect": "\"cas\"" } }
+      ],
+      "defaults": { "gpu.xenos/present_effect": "\"bilinear\"" }
+    },
+    {
       "id": "filtering", "label": "Texture filtering", "group": "Video",
       "help": "Anisotropic filtering: sharper textures at an angle.",
       "choices": [
@@ -96,6 +106,16 @@
         { "label": "Stretch", "set": { "gpu.xenos/present_letterbox": "false" } }
       ],
       "defaults": { "gpu.xenos/present_letterbox": "true" }
+    },
+    {
+      "id": "screen_shape", "label": "Screen shape", "group": "Video",
+      "help": "21:9 and 32:9 widen the 3D view for ultrawide screens. The HUD keeps its layout and is stretched to fit.",
+      "choices": [
+        { "label": "16:9 (original)", "set": { "blitz/aspect_ratio": "\"16:9\"" } },
+        { "label": "21:9 ultrawide", "set": { "blitz/aspect_ratio": "\"21:9\"" } },
+        { "label": "32:9 super ultrawide", "set": { "blitz/aspect_ratio": "\"32:9\"" } }
+      ],
+      "defaults": { "blitz/aspect_ratio": "\"16:9\"" }
     },
     {
       "id": "fps", "label": "FPS counter", "group": "Video",

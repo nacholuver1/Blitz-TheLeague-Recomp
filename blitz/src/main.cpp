@@ -18,6 +18,7 @@
 #include <atomic>
 #include <cstdlib>
 #include <filesystem>
+#include <string>
 #include <string_view>
 
 #include <rex/path_settings.h>
@@ -95,6 +96,13 @@ class BlitzApp : public rex::app::TitleApp {
     // helmet logo is baked once when a campaign loads, so a skipped bake leaves
     // the custom team's logo missing for the whole session.
     DefaultSetting("gpu.xenos.async_shader_compilation", "false");
+    // Ultrawide: the 3D view is widened in blitz_hooks.cpp; present the picture at the same
+    // shape (letterboxed to the window as usual). Not saved, so it always follows the setting.
+    if (const std::string aspect = blitz::Settings().aspect_ratio.Get(); aspect == "21:9") {
+      DefaultSetting("gpu.xenos.present_aspect_ratio", "64:27");
+    } else if (aspect == "32:9") {
+      DefaultSetting("gpu.xenos.present_aspect_ratio", "32:9");
+    }
 
     // Find the game files without a command line: a "game" folder next to the
     // exe or in a parent folder. --title.game_root still wins. RunSetup asks the

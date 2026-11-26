@@ -36,7 +36,8 @@ Controls
 
 Settings
   Saved to blitz.toml next to the exe. Render resolution, anti-aliasing and the
-  audio buffer apply at startup; changing them in the launcher relaunches once.
+  audio buffer and the screen shape apply at startup; changing them in the
+  launcher relaunches once.
   Recommended: 2x render resolution, FXAA, 16x texture filtering. 4x render
   resolution is very heavy; the game runs in slow motion if your GPU can't
   keep up, because the game logic runs per frame.
@@ -59,6 +60,10 @@ Command-line options (every setting in blitz.toml works as --section.name=value)
   --gpu.driver=vulkan         use Vulkan instead of Direct3D 12 (Linux always
                               uses Vulkan)
   --gpu.resolution_scale_x=2 --gpu.resolution_scale_y=2   render resolution
+  --gpu.xenos.present_effect=fsr|cas|bilinear   scaling to your screen: AMD FSR 1
+                              upscaling, AMD CAS sharpening, or plain (default)
+  --blitz.aspect_ratio=21:9|32:9|16:9   ultrawide: widens the 3D view (the HUD
+                              keeps its layout and is stretched to fit)
   Note: options given on the command line are saved to blitz.toml if you
   change a setting in the menu during that run.
 

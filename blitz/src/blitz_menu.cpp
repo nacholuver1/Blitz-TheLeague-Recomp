@@ -73,10 +73,12 @@ enum Row {
   kDisplayMode,
   kRenderRes,
   kAntiAlias,
+  kUpscaling,
   kSharpen,
   kFiltering,
   kVsync,
   kAspect,
+  kScreenShape,
   kVolume,
   kMute,
   kMuteUnfocused,
@@ -90,15 +92,16 @@ enum Row {
 // kSharpen is left out until the sharpening pass exists (blitz.sharpen is saved
 // but nothing reads it yet).
 const std::vector<Row> kLauncherRows = {
-    kStartGame, kUpdates, kDisplayMode, kRenderRes,  kAntiAlias,  kFiltering, kVsync,
-    kAspect,    kVolume,      kMute,       kMuteUnfocused, kAudioBuffer, kFpsCounter,
+    kStartGame, kUpdates, kDisplayMode, kRenderRes,  kAntiAlias,  kUpscaling, kFiltering, kVsync,
+    kAspect,    kScreenShape, kVolume,  kMute,       kMuteUnfocused, kAudioBuffer, kFpsCounter,
     kLauncherAtStart, kQuit};
 const std::vector<Row> kInGameRows = {
-    kDisplayMode, kRenderRes,  kAntiAlias,   kFiltering,       kVsync,
-    kAspect,      kVolume,     kMute,        kMuteUnfocused, kAudioBuffer,  kFpsCounter,
+    kDisplayMode, kRenderRes,  kAntiAlias,   kUpscaling, kFiltering,       kVsync,
+    kAspect,      kScreenShape, kVolume,     kMute,        kMuteUnfocused, kAudioBuffer,  kFpsCounter,
     kLauncherAtStart, kCloseMenu, kQuit};
 
 constexpr const char* kRestartSettings[] = {"gpu.resolution_scale_x", "gpu.xenos.swap_post_effect",
+                                            "blitz.aspect_ratio",
                                             "apu.max_queued_frames"};
 
 constexpr int kMaxScale = 4;
@@ -118,6 +121,27 @@ const int kAudioFrames[] = {8, 16, 32, 64};
 const char* const kAudioLabels[] = {"Small (8)", "Medium (16)", "Large (32)", "Max (64)"};
 constexpr int kAudioCount = 4;
 
+// gpu.xenos.present_effect: how the picture is scaled to the window.
+const char* const kUpscaleValues[] = {"bilinear", "fsr", "cas"};
+const char* const kUpscaleLabels[] = {"Off", "AMD FSR 1", "AMD CAS"};
+constexpr int kUpscaleCount = 3;
+
+const char* const kShapeValues[] = {"16:9", "21:9", "32:9"};
+const char* const kShapeLabels[] = {"16:9 (original)", "21:9 ultrawide", "32:9 super ultrawide"};
+constexpr int kShapeCount = 3;
+
+int UpscaleIndex() {
+  const std::string v = GetText("gpu.xenos.present_effect");
+  for (int i = 0; i < kUpscaleCount; i++)
+    if (v == kUpscaleValues[i]) return i;
+  return 0;
+}
+int ShapeIndex() {
+  const std::string v = GetText("blitz.aspect_ratio");
+  for (int i = 0; i < kShapeCount; i++)
+    if (v == kShapeValues[i]) return i;
+  return 0;
+}
 int AAIndex() {
   const std::string v = GetText("gpu.xenos.swap_post_effect");
   for (int i = 0; i < kAACount; i++)
@@ -146,6 +170,8 @@ const char* Label(Row row) {
     case kDisplayMode: return "Display mode";
     case kRenderRes: return "Render resolution";
     case kAntiAlias: return "Anti-aliasing";
+    case kUpscaling: return "Upscaling";
+    case kScreenShape: return "Screen shape";
     case kSharpen: return "Sharpening";
     case kFiltering: return "Texture filtering";
     case kVsync: return "VSync";
@@ -183,6 +209,8 @@ const char* Note(Row row) {
     case kDisplayMode: return "Borderless fullscreen or a window.";
     case kRenderRes: return "Internal resolution; above your screen it supersamples.";
     case kAntiAlias: return "FXAA smooths jagged edges.";
+    case kUpscaling: return "Sharper scaling to your screen. FSR shines at 1x on a big screen.";
+    case kScreenShape: return "Ultrawide widens the 3D view; the HUD is stretched to fit.";
     case kSharpen: return "Sharpens the final image. Pairs well with FXAA.";
     case kFiltering: return "Anisotropic filtering: sharper textures at an angle.";
     case kVsync: return "Wait for the monitor refresh. Off can tear.";
@@ -217,6 +245,8 @@ std::string Value(Row row) {
     case kDisplayMode: return GetBool("ui.fullscreen") ? "Fullscreen" : "Windowed";
     case kRenderRes: return kRenderLabels[ScaleIndex()];
     case kAntiAlias: return kAALabels[AAIndex()];
+    case kUpscaling: return kUpscaleLabels[UpscaleIndex()];
+    case kScreenShape: return kShapeLabels[ShapeIndex()];
     case kSharpen: {
       const int pct = static_cast<int>(std::lround(GetF64("blitz.sharpen") * 100.0));
       return pct == 0 ? std::string("Off") : std::to_string(pct) + "%";
@@ -242,6 +272,7 @@ const char* RestartSetting(Row row) {
   switch (row) {
     case kRenderRes: return "gpu.resolution_scale_x";
     case kAntiAlias: return "gpu.xenos.swap_post_effect";
+    case kScreenShape: return "blitz.aspect_ratio";
     case kAudioBuffer: return "apu.max_queued_frames";
     default: return nullptr;
   }
@@ -491,6 +522,12 @@ class BlitzMenu final : public rex::ui::IDialog {
       }
       case kAntiAlias:
         Set("gpu.xenos.swap_post_effect", kAAValues[Wrap(AAIndex(), dir, kAACount)]);
+        break;
+      case kUpscaling:
+        Set("gpu.xenos.present_effect", kUpscaleValues[Wrap(UpscaleIndex(), dir, kUpscaleCount)]);
+        break;
+      case kScreenShape:
+        Set("blitz.aspect_ratio", kShapeValues[Wrap(ShapeIndex(), dir, kShapeCount)]);
         break;
       case kSharpen: {
         int step = static_cast<int>(std::lround(GetF64("blitz.sharpen") * 10.0));

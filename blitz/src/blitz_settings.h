@@ -5,6 +5,7 @@
 #pragma once
 
 #include <filesystem>
+#include <string>
 
 #include <rex/setting.h>
 
@@ -26,9 +27,22 @@ class BlitzSettings : public rex::SettingOwner {
               "Your copy of the game, a disc image or an extracted folder (--blitz.game=path), "
               "started without the launcher menu; for launchers and shortcuts",
               rex::kNoSave);
+  REX_SETTING(std::string, aspect_ratio, "16:9",
+              "Screen shape the 3D view is drawn for: 16:9 (the game's own), 21:9 or 32:9 for "
+              "ultrawide screens (the picture is stretched to the window)",
+              rex::Allowed("16:9", "21:9", "32:9"), rex::kRestart);
   REX_SETTING(f64, sharpen, 0.0, "Output sharpening strength, 0 is off", rex::Range{0.0, 1.0});
 };
 
 BlitzSettings& Settings();
+
+// Width / height of the 3D view for blitz.aspect_ratio. 21:9 is 64:27 (2560x1080; 3440x1440
+// is within 1%).
+inline double AspectRatio() {
+  const std::string v = Settings().aspect_ratio.Get();
+  if (v == "21:9") return 64.0 / 27.0;
+  if (v == "32:9") return 32.0 / 9.0;
+  return 16.0 / 9.0;
+}
 
 }  // namespace blitz
