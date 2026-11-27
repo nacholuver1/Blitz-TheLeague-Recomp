@@ -12,6 +12,7 @@
 #include "blitz_menu.h"
 #include "blitz_settings.h"
 #include "blitz_setup.h"
+#include "blitz_sysinfo.h"
 #include "blitz_updater.h"
 #include "generated/default/blitz_init.h"
 
@@ -294,7 +295,8 @@ int BlitzMain(BlitzApp& app, const rex::CLIArgList& args) {
   // path is kept for an update's relaunch (on Linux the running file is renamed)
   blitz::updater::Init(rex::platform::GetExecutablePath(), args.GetAll());
   if (app.Init(args)) {
-    if (app.RunSetup() && app.RunLauncher() && app.LaunchTitle()) {
+    // system info after the launcher, so the log shows the options the game starts with
+    if (app.RunSetup() && app.RunLauncher() && (blitz::LogSystemInfo(), app.LaunchTitle())) {
       app.StartInGameMenu();
       app.Run();
     }
