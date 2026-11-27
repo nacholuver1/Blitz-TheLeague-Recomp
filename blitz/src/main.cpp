@@ -123,7 +123,10 @@ class BlitzApp : public rex::app::TitleApp {
     // Blitz renders some textures on the GPU and then processes them on the CPU
     // (create-a-team helmets, sideline players/cheerleaders). Without resolve
     // readback the CPU sees stale memory: scrambled helmets, invisible sideline.
-    DefaultSetting("gpu.xenos.readback_resolve", "full");
+    // "fast" (asynchronous) is enough for those and doesn't stall the GPU: 4x went
+    // from 30-39 fps with "full" to a solid 60 (2026-11-27; helmets, sideline and a
+    // career session at 3x checked by the player).
+    DefaultSetting("gpu.xenos.readback_resolve", "fast");
     // With async compilation, draws whose pipeline isn't ready are skipped. The
     // helmet logo is baked once when a campaign loads, so a skipped bake leaves
     // the custom team's logo missing for the whole session.
