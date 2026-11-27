@@ -1,0 +1,272 @@
+diff --git a/include/rex/apu/audio_system.h b/include/rex/apu/audio_system.h
+index 73922aa..6b92fec 100644
+--- a/include/rex/apu/audio_system.h
++++ b/include/rex/apu/audio_system.h
+@@ -51,6 +51,10 @@ class REX_APU_API AudioSettings final : public SettingOwner {
+   REX_SETTING(f64, peak_limit, 0.0, "Silence a stream that stays above this peak, 0 is off",
+               Range{0.0, 8.0});
+   REX_SETTING(u32, max_queued_frames, 8, "Frames a stream may queue", Range{4, 64}, kUntilLaunch);
++  // [blitz diagnostics]
++  REX_SETTING(u32, diag_starve_ms, 2000,
++              "Log a snapshot when a render client submits nothing for this long",
++              Range{100, 60000});
+ };
+ 
+ /**
+diff --git a/src/kernel/apu.cpp b/src/kernel/apu.cpp
+index 10a2c35..0bf30e3 100644
+--- a/src/kernel/apu.cpp
++++ b/src/kernel/apu.cpp
+@@ -4,6 +4,9 @@
+ #include <array>
+ #include <chrono>
+ #include <cstddef>
++#include <string>
++
++#include <format>
+ 
+ #include <rex/platform/perf.h>
+ #include <rex/logging/log_category.h>
+@@ -29,6 +32,12 @@ namespace {
+ constexpr std::chrono::milliseconds kWorkerShutdownTimeout{500};
+ constexpr u32 kDefaultQueuedFrames = 8;
+ 
++i64 DiagNowMs() {
++  return std::chrono::duration_cast<std::chrono::milliseconds>(
++             std::chrono::steady_clock::now().time_since_epoch())
++      .count();
++}
++
+ }  // namespace
+ 
+ APU::APU(TitleRuntime& runtime, rex::apu::IAudioSystem* audio)
+@@ -65,6 +74,8 @@ Result<void> APU::Setup() {
+     return std::unexpected(launched.error());
+   }
+   worker_thread_ = *launched;
++  diag_stop_ = false;
++  diag_thread_ = std::thread([this] { DiagWatchdogMain(); });
+   return Ok();
+ }
+ 
+@@ -95,12 +106,23 @@ void APU::WorkerMain() {
+         client_callback = clients_[index].callback;
+         client_callback_arg = clients_[index].wrapped_callback_arg;
+       }
++      ClientDiag& d = diag_[index];
++      worker_last_wake_ms_ = DiagNowMs();
++      ++d.wakes;
+       if (client_callback) {
+         REX_PROFILE_SCOPE_TEXT("apu", "rex::kernel::APU->client_callback");
++        const u64 submits_before = d.submits.load();
++        worker_callback_client_ = static_cast<i32>(index);
++        worker_in_callback_ms_ = DiagNowMs();
+         u64 args[] = {client_callback_arg};
+         StateOf(runtime_).GetFunctionDispatcher()->Execute(
+             KernelThread::GetCallingThread()->GetThreadState(), client_callback, args,
+             std::size(args));
++        worker_in_callback_ms_ = 0;
++        ++d.callbacks_done;
++        if (d.submits.load() == submits_before) {
++          ++d.empty_callbacks;
++        }
+       }
+       pumped = true;
+     }
+@@ -117,7 +139,86 @@ void APU::WorkerMain() {
+   worker_running_ = false;
+ }
+ 
++void APU::StopDiagWatchdog() {
++  {
++    std::lock_guard lock(diag_mutex_);
++    diag_stop_ = true;
++  }
++  diag_wake_.notify_all();
++  if (diag_thread_.joinable()) {
++    diag_thread_.join();
++  }
++}
++
++// [blitz diagnostics] Logs one snapshot per stall, from a plain host thread so it still reports
++// when the worker is stuck inside a guest callback.
++void APU::DiagWatchdogMain() {
++  for (;;) {
++    {
++      std::unique_lock lock(diag_mutex_);
++      if (diag_wake_.wait_for(lock, std::chrono::milliseconds(250), [this] { return diag_stop_; })) {
++        return;
++      }
++    }
++    if (paused_) {
++      continue;
++    }
++    const i64 limit_ms = audio_ ? audio_->GetSettings().diag_starve_ms.Get() : 2000;
++    const i64 now = DiagNowMs();
++    for (u32 i = 0; i < kMaxClients; ++i) {
++      ClientDiag& d = diag_[i];
++      const u64 submits = d.submits.load();
++      const i64 last = d.last_submit_ms.load();
++      if (submits == 0 || last == 0) {
++        continue;
++      }
++      const i64 quiet = now - last;
++      if (quiet < limit_ms) {
++        if (d.reported) {
++          d.reported = false;
++          REXAPU_WARN("audio diag: client {} is submitting frames again after {} submits", i,
++                      submits);
++        }
++        continue;
++      }
++      if (d.reported) {
++        continue;
++      }
++      d.reported = true;
++      const u64 wakes = d.wakes.load();
++      const i64 credits = static_cast<i64>(d.initial_credits.load()) +
++                          static_cast<i64>(d.credits_released.load()) - static_cast<i64>(wakes);
++      const i64 in_cb = worker_in_callback_ms_.load();
++      const i32 cb_client = worker_callback_client_.load();
++      std::string worker;
++      const char* verdict;
++      if (!worker_running_) {
++        worker = "not running";
++        verdict = "the audio worker has stopped";
++      } else if (in_cb != 0) {
++        worker = std::format("inside the guest callback of client {} for {} ms", cb_client,
++                             now - in_cb);
++        verdict = "a guest audio callback is blocked";
++      } else {
++        const i64 woke = worker_last_wake_ms_.load();
++        worker = woke ? std::format("waiting, last woke {} ms ago", now - woke)
++                      : std::string("waiting, never woke");
++        verdict = credits <= 0 ? "credits leaked: callbacks returned without submitting"
++                               : "the worker holds credits but is not waking";
++      }
++      REXAPU_WARN(
++          "audio diag: client {} has submitted no frames for {} ms ({}). submits {}, refused {}; "
++          "credits: start {} + returned {} (dropped at max {}) - taken {} = {}; callbacks done {}, "
++          "{} without a submit; worker {}; last submit from guest thread {:08X}",
++          i, quiet, verdict, submits, d.refused.load(), d.initial_credits.load(),
++          d.credits_released.load(), d.credits_full.load(), wakes, credits,
++          d.callbacks_done.load(), d.empty_callbacks.load(), worker, d.last_submit_thread.load());
++    }
++  }
++}
++
+ void APU::StopWorker() {
++  StopDiagWatchdog();
+   {
+     std::lock_guard pause_lock(pause_mutex_);
+     if (worker_running_) {
+@@ -173,7 +274,16 @@ Result<u32> APU::RegisterClient(u32 callback, u32 callback_arg) {
+   }
+   const u32 index = static_cast<u32>(free - clients_.begin());
+   platform::Semaphore* semaphore = semaphores_[index].get();
+-  auto stream = audio_->OpenStream([semaphore] { semaphore->Release(1, nullptr); });
++  ClientDiag* diag = &diag_[index];
++  diag->Reset();
++  diag->initial_credits = queued_frames_;
++  auto stream = audio_->OpenStream([semaphore, diag] {
++    if (semaphore->Release(1, nullptr)) {
++      ++diag->credits_released;
++    } else {
++      ++diag->credits_full;
++    }
++  });
+   if (!stream) {
+     REXAPU_ERROR("the audio system refused a stream, {}", stream.error().message);
+     return Err<u32>(StatusError(X_STATUS_UNSUCCESSFUL));
+@@ -194,6 +304,7 @@ void APU::UnregisterClient(u32 index) {
+   audio_->CloseStream(clients_[index].stream);
+   StateOf(runtime_).GetAddressSpace()->SystemHeapFree(clients_[index].wrapped_callback_arg);
+   clients_[index] = {};
++  diag_[index].Reset();
+   platform::Semaphore* semaphore = semaphores_[index].get();
+   while (platform::Wait(semaphore, false, std::chrono::milliseconds(0)) ==
+          platform::WaitResult::kSuccess) {}
+@@ -211,8 +322,18 @@ void APU::SubmitFrame(u32 index, u32 samples_ptr) {
+   for (size_t i = 0; i < frame.size(); ++i) {
+     frame[i] = samples[i];
+   }
+-  if (auto submitted = audio_->Submit(clients_[index].stream, frame);
+-      !submitted && !clients_[index].refused_logged) {
++  auto submitted = audio_->Submit(clients_[index].stream, frame);
++  ClientDiag& d = diag_[index];
++  if (submitted) {
++    ++d.submits;
++    d.last_submit_ms = DiagNowMs();
++    if (KernelThread* thread = KernelThread::GetCallingThread()) {
++      d.last_submit_thread = thread->GetThreadID();
++    }
++  } else {
++    ++d.refused;
++  }
++  if (!submitted && !clients_[index].refused_logged) {
+     clients_[index].refused_logged = true;
+     REXAPU_WARN("the audio system refused a frame for client {}, {}", index,
+                 submitted.error().message);
+diff --git a/src/kernel/apu.h b/src/kernel/apu.h
+index 7306600..5e4d1af 100644
+--- a/src/kernel/apu.h
++++ b/src/kernel/apu.h
+@@ -12,8 +12,10 @@
+ 
+ #include <array>
+ #include <atomic>
++#include <condition_variable>
+ #include <memory>
+ #include <mutex>
++#include <thread>
+ 
+ #include <rex/platform.h>
+ #include <rex/apu/audio_system.h>
+@@ -123,6 +125,47 @@ class APU : public NonCopyable {
+ 
+   void WorkerMain();
+ 
++  // [blitz diagnostics] Audio starve snapshot. Counters per client, written lock-free by the mixer
++  // thread (credits), the worker (wakes, callbacks) and the submitting guest thread (submits). A
++  // host watchdog thread, independent of the worker, logs one snapshot when a client that was
++  // submitting has submitted nothing for 2 s, and one line when it submits again.
++  struct ClientDiag {
++    std::atomic<u64> credits_released{0};  // mixer: a played frame gave a credit back
++    std::atomic<u64> credits_full{0};      // mixer: the credit was dropped, semaphore at its max
++    std::atomic<u64> wakes{0};             // worker: took a credit for this client
++    std::atomic<u64> callbacks_done{0};    // worker: the guest callback returned
++    std::atomic<u64> empty_callbacks{0};   // worker: the callback returned without a submit
++    std::atomic<u64> submits{0};           // SubmitFrame calls that reached the stream
++    std::atomic<u64> refused{0};           // submits the audio system refused (queue full)
++    std::atomic<i64> last_submit_ms{0};    // steady-clock ms of the last submit
++    std::atomic<u32> last_submit_thread{0};
++    std::atomic<u32> initial_credits{0};
++    std::atomic<bool> reported{false};
++    void Reset() {
++      credits_released = 0;
++      credits_full = 0;
++      wakes = 0;
++      callbacks_done = 0;
++      empty_callbacks = 0;
++      submits = 0;
++      refused = 0;
++      last_submit_ms = 0;
++      last_submit_thread = 0;
++      initial_credits = 0;
++      reported = false;
++    }
++  };
++  void DiagWatchdogMain();
++  void StopDiagWatchdog();
++  std::array<ClientDiag, kMaxClients> diag_{};
++  std::atomic<i64> worker_in_callback_ms_{0};  // 0 = worker not inside a guest callback
++  std::atomic<i32> worker_callback_client_{-1};
++  std::atomic<i64> worker_last_wake_ms_{0};
++  std::thread diag_thread_;
++  std::mutex diag_mutex_;
++  std::condition_variable diag_wake_;
++  bool diag_stop_ = false;
++
+   TitleRuntime& runtime_;
+   rex::apu::IAudioSystem* audio_;
+   u32 queued_frames_;
