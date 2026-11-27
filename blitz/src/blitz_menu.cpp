@@ -106,6 +106,10 @@ constexpr const char* kRestartSettings[] = {"gpu.resolution_scale_x", "gpu.xenos
                                             "apu.max_queued_frames"};
 
 constexpr int kMaxScale = 4;
+// The menu offers only the scales that held 60 fps on an RTX 4070 SUPER (2026-11-27):
+// the game's speed follows its frame rate, so a heavier scale plays in slow motion.
+// Higher ones still work from blitz.toml or the command line and show as custom.
+constexpr int kMenuMaxScale = 3;
 const char* const kRenderLabels[] = {"1x  1280x720 (original)", "2x  2560x1440", "3x  3840x2160",
                                      "4x  5120x2880"};
 
@@ -209,7 +213,7 @@ const char* Note(Row row) {
     }
     case kStartGame: return "Start Blitz: The League with these settings.";
     case kDisplayMode: return "Borderless fullscreen or a window.";
-    case kRenderRes: return "Internal resolution; above your screen it supersamples.";
+    case kRenderRes: return "Below 60 fps the game is in slow motion: pick the highest that holds 60.";
     case kAntiAlias: return "FXAA smooths jagged edges.";
     case kUpscaling: return "Sharper scaling to your screen. FSR shines at 1x on a big screen.";
     case kScreenShape: return "Ultrawide widens the 3D view; the HUD is stretched to fit.";
@@ -222,7 +226,7 @@ const char* Note(Row row) {
     case kMuteUnfocused: return "Silence the game when its window is in the background.";
     case kAudioBuffer: return "Bigger fixes crackles, smaller has less delay.";
     case kFpsCounter: return "Show frame rate in the corner (also F3).";
-    case kSmartWait: return "Smart lets idle game threads sleep: less CPU, cooler laptops. Console spins like the Xbox.";
+    case kSmartWait: return "Smart: idle threads sleep (less CPU, cooler laptops). Console: as the Xbox.";
     case kLauncherAtStart: return "Off starts the game directly. F1 / Esc / Guide still open this menu.";
     case kCloseMenu: return "Back to the game.";
     case kQuit: return nullptr;
@@ -246,7 +250,9 @@ std::string Value(Row row) {
         default: return GetBool("blitz.check_updates") ? "Check at startup" : "Off";
       }
     case kDisplayMode: return GetBool("ui.fullscreen") ? "Fullscreen" : "Windowed";
-    case kRenderRes: return kRenderLabels[ScaleIndex()];
+    case kRenderRes:
+      return std::string(kRenderLabels[ScaleIndex()]) +
+             (ScaleIndex() + 1 > kMenuMaxScale ? " (custom)" : "");
     case kAntiAlias: return kAALabels[AAIndex()];
     case kUpscaling: return kUpscaleLabels[UpscaleIndex()];
     case kScreenShape: return kShapeLabels[ShapeIndex()];
@@ -519,7 +525,7 @@ class BlitzMenu final : public rex::ui::IDialog {
     switch (row) {
       case kDisplayMode: SetBool("ui.fullscreen", !GetBool("ui.fullscreen")); break;
       case kRenderRes: {
-        const int s = Wrap(ScaleIndex(), dir, kMaxScale) + 1;
+        const int s = Wrap(ScaleIndex(), dir, kMenuMaxScale) + 1;
         SetInt("gpu.resolution_scale_x", s);
         SetInt("gpu.resolution_scale_y", s);
         break;

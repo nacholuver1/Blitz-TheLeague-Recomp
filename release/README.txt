@@ -38,9 +38,11 @@ Settings
   Saved to blitz.toml next to the exe. Render resolution, anti-aliasing and the
   audio buffer and the screen shape apply at startup; changing them in the
   launcher relaunches once.
-  Recommended: 2x render resolution, FXAA, 16x texture filtering. 4x render
-  resolution is very heavy; the game runs in slow motion if your GPU can't
-  keep up, because the game logic runs per frame.
+  Recommended: 2x render resolution, FXAA, 16x texture filtering. The game
+  runs in slow motion below 60 fps, because its logic runs per frame, so the
+  menu goes up to 3x (about 60 fps on an RTX 4070 SUPER). 4x (30 fps there)
+  still works from the command line (--gpu.resolution_scale_x=4
+  --gpu.resolution_scale_y=4) for much faster GPUs.
   "CPU waits: Smart" (the default) lets the game sleep while it waits for the
   GPU instead of spinning a whole CPU core, as it did on the Xbox: less CPU
   use, which helps laptops and handhelds keep their speed. "Console" brings

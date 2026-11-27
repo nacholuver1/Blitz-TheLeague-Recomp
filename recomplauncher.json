@@ -47,12 +47,11 @@
     },
     {
       "id": "resolution", "label": "Render resolution", "group": "Video",
-      "help": "What the game draws at. 1x (720p) is the console's own; above your screen it supersamples.",
+      "help": "What the game draws at. 1x (720p) is the console's own. Below 60 fps the game runs in slow motion: pick the highest that holds 60.",
       "choices": [
         { "label": "1x 1280x720 (original)", "set": { "gpu/resolution_scale_x": "1", "gpu/resolution_scale_y": "1" } },
         { "label": "2x 2560x1440", "set": { "gpu/resolution_scale_x": "2", "gpu/resolution_scale_y": "2" } },
-        { "label": "3x 3840x2160", "set": { "gpu/resolution_scale_x": "3", "gpu/resolution_scale_y": "3" } },
-        { "label": "4x 5120x2880", "set": { "gpu/resolution_scale_x": "4", "gpu/resolution_scale_y": "4" } }
+        { "label": "3x 3840x2160", "set": { "gpu/resolution_scale_x": "3", "gpu/resolution_scale_y": "3" } }
       ],
       "defaults": { "gpu/resolution_scale_x": "1", "gpu/resolution_scale_y": "1" }
     },
