@@ -37,10 +37,12 @@ exit /b %errorlevel%
 :package
 cmake --build --preset win-amd64-release
 if errorlevel 1 exit /b 1
-rem Program files only. Never touches BlitzPC\user or BlitzPC\blitz.toml.
+rem Program files and the launcher manifest only. Never touches BlitzPC\user or BlitzPC\blitz.toml.
 copy /y "out\build\win-amd64\Release\blitz.exe" "..\BlitzPC" >nul
 if errorlevel 1 exit /b 1
 copy /y "out\build\win-amd64\Release\*.dll" "..\BlitzPC" >nul
+if errorlevel 1 exit /b 1
+copy /y "..\recomplauncher.json" "..\BlitzPC" >nul
 if errorlevel 1 exit /b 1
 echo Packaged into BlitzPC.
 exit /b 0

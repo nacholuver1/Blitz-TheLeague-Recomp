@@ -31,7 +31,9 @@ class BlitzSettings : public rex::SettingOwner {
               "Screen shape the 3D view is drawn for: 16:9 (the game's own), 21:9 or 32:9 for "
               "ultrawide screens (the picture is stretched to the window)",
               rex::Allowed("16:9", "21:9", "32:9"), rex::kRestart);
-  REX_SETTING(f64, sharpen, 0.0, "Output sharpening strength, 0 is off", rex::Range{0.0, 1.0});
+  // Unused (the sharpening row was removed; Upscaling's AMD CAS sharpens). Still
+  // registered so config files that saved it keep loading without a warning.
+  REX_SETTING(f64, sharpen, 0.0, "Unused, kept so older config files load", rex::Range{0.0, 1.0});
   REX_SETTING(bool, smart_wait, true,
               "The waits for the GPU sleep after a short spin instead of keeping a core busy "
               "(false: the console's busy waits)");

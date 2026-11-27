@@ -80,22 +80,12 @@
       "help": "Anisotropic filtering: sharper textures at an angle.",
       "choices": [
         { "label": "Game default", "set": { "gpu/anisotropic_override": "-1" } },
-        { "label": "Off", "set": { "gpu/anisotropic_override": "0" } },
         { "label": "2x", "set": { "gpu/anisotropic_override": "2" } },
         { "label": "4x", "set": { "gpu/anisotropic_override": "3" } },
         { "label": "8x", "set": { "gpu/anisotropic_override": "4" } },
         { "label": "16x", "set": { "gpu/anisotropic_override": "5" } }
       ],
       "defaults": { "gpu/anisotropic_override": "3" }
-    },
-    {
-      "id": "vsync", "label": "VSync", "group": "Video",
-      "help": "Waits for the monitor's refresh. The game's speed follows its frame rate, so keep it on.",
-      "choices": [
-        { "label": "On", "set": { "gpu/vsync": "true" } },
-        { "label": "Off", "set": { "gpu/vsync": "false" } }
-      ],
-      "defaults": { "gpu/vsync": "true" }
     },
     {
       "id": "aspect", "label": "Aspect ratio", "group": "Video",
@@ -139,15 +129,6 @@
       "help": "Master volume: 1 is the game's own level.",
       "slider": { "key": "apu/gain", "min": 0, "max": 2, "step": 0.1, "format": "%.1f" },
       "defaults": { "apu/gain": "1.0" }
-    },
-    {
-      "id": "mute", "label": "Mute", "group": "Audio",
-      "help": "Silences all game audio.",
-      "choices": [
-        { "label": "Off", "set": { "apu/mute": "false" } },
-        { "label": "On", "set": { "apu/mute": "true" } }
-      ],
-      "defaults": { "apu/mute": "false" }
     },
     {
       "id": "mute_unfocused", "label": "Mute in background", "group": "Audio",

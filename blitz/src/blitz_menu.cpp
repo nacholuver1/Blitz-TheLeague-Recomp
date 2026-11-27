@@ -74,13 +74,10 @@ enum Row {
   kRenderRes,
   kAntiAlias,
   kUpscaling,
-  kSharpen,
   kFiltering,
-  kVsync,
   kAspect,
   kScreenShape,
   kVolume,
-  kMute,
   kMuteUnfocused,
   kAudioBuffer,
   kFpsCounter,
@@ -90,15 +87,13 @@ enum Row {
   kQuit,
 };
 
-// kSharpen is left out until the sharpening pass exists (blitz.sharpen is saved
-// but nothing reads it yet).
 const std::vector<Row> kLauncherRows = {
-    kStartGame, kUpdates, kDisplayMode, kRenderRes,  kAntiAlias,  kUpscaling, kFiltering, kVsync,
-    kAspect,    kScreenShape, kVolume,  kMute,       kMuteUnfocused, kAudioBuffer, kFpsCounter,
+    kStartGame, kUpdates, kDisplayMode, kRenderRes,  kAntiAlias,  kUpscaling, kFiltering,
+    kAspect,    kScreenShape, kVolume,  kMuteUnfocused, kAudioBuffer, kFpsCounter,
     kSmartWait, kLauncherAtStart, kQuit};
 const std::vector<Row> kInGameRows = {
-    kDisplayMode, kRenderRes,  kAntiAlias,   kUpscaling, kFiltering,       kVsync,
-    kAspect,      kScreenShape, kVolume,     kMute,        kMuteUnfocused, kAudioBuffer,  kFpsCounter,
+    kDisplayMode, kRenderRes,  kAntiAlias,   kUpscaling, kFiltering,
+    kAspect,      kScreenShape, kVolume,     kMuteUnfocused, kAudioBuffer,  kFpsCounter,
     kSmartWait, kLauncherAtStart, kCloseMenu, kQuit};
 
 constexpr const char* kRestartSettings[] = {"gpu.resolution_scale_x", "gpu.xenos.swap_post_effect",
@@ -117,10 +112,11 @@ const char* const kAAValues[] = {"none", "fxaa", "fxaa_extreme"};
 const char* const kAALabels[] = {"Off", "FXAA", "FXAA (extreme)"};
 constexpr int kAACount = 3;
 
-// gpu.anisotropic_override: -1 game, 0 off, 1..5 = 1x..16x
-const int kAnisoValues[] = {-1, 0, 2, 3, 4, 5};
-const char* const kAnisoLabels[] = {"Game default", "Off", "2x", "4x", "8x", "16x"};
-constexpr int kAnisoCount = 6;
+// gpu.anisotropic_override: -1 game, 0 off, 1..5 = 1x..16x. "Off" is not offered:
+// it can only look worse than the game's own filtering.
+const int kAnisoValues[] = {-1, 2, 3, 4, 5};
+const char* const kAnisoLabels[] = {"Game default", "2x", "4x", "8x", "16x"};
+constexpr int kAnisoCount = 5;
 
 const int kAudioFrames[] = {8, 16, 32, 64};
 const char* const kAudioLabels[] = {"Small (8)", "Medium (16)", "Large (32)", "Max (64)"};
@@ -177,12 +173,9 @@ const char* Label(Row row) {
     case kAntiAlias: return "Anti-aliasing";
     case kUpscaling: return "Upscaling";
     case kScreenShape: return "Screen shape";
-    case kSharpen: return "Sharpening";
     case kFiltering: return "Texture filtering";
-    case kVsync: return "VSync";
     case kAspect: return "Aspect ratio";
     case kVolume: return "Volume";
-    case kMute: return "Mute";
     case kMuteUnfocused: return "Mute in background";
     case kAudioBuffer: return "Audio buffer";
     case kFpsCounter: return "FPS counter";
@@ -217,12 +210,9 @@ const char* Note(Row row) {
     case kAntiAlias: return "FXAA smooths jagged edges.";
     case kUpscaling: return "Sharper scaling to your screen. FSR shines at 1x on a big screen.";
     case kScreenShape: return "Ultrawide widens the 3D view; the HUD is stretched to fit.";
-    case kSharpen: return "Sharpens the final image. Pairs well with FXAA.";
     case kFiltering: return "Anisotropic filtering: sharper textures at an angle.";
-    case kVsync: return "Wait for the monitor refresh. Off can tear.";
     case kAspect: return "Keep the game's shape with bars, or stretch to the window.";
     case kVolume: return "Master volume.";
-    case kMute: return "Silence all game audio.";
     case kMuteUnfocused: return "Silence the game when its window is in the background.";
     case kAudioBuffer: return "Bigger fixes crackles, smaller has less delay.";
     case kFpsCounter: return "Show frame rate in the corner (also F3).";
@@ -256,16 +246,10 @@ std::string Value(Row row) {
     case kAntiAlias: return kAALabels[AAIndex()];
     case kUpscaling: return kUpscaleLabels[UpscaleIndex()];
     case kScreenShape: return kShapeLabels[ShapeIndex()];
-    case kSharpen: {
-      const int pct = static_cast<int>(std::lround(GetF64("blitz.sharpen") * 100.0));
-      return pct == 0 ? std::string("Off") : std::to_string(pct) + "%";
-    }
     case kFiltering: return kAnisoLabels[AnisoIndex()];
-    case kVsync: return GetBool("gpu.vsync") ? "On" : "Off";
     case kAspect: return GetBool("gpu.xenos.present_letterbox") ? "Keep shape" : "Stretch";
     case kVolume:
       return std::to_string(static_cast<int>(std::lround(GetF64("apu.gain") * 100.0))) + "%";
-    case kMute: return GetBool("apu.mute") ? "On" : "Off";
     case kMuteUnfocused: return GetBool("apu.mute_unfocused") ? "On" : "Off";
     case kAudioBuffer: return kAudioLabels[AudioIndex()];
     case kFpsCounter: return GetBool("blitz.show_fps") ? "On" : "Off";
@@ -539,16 +523,9 @@ class BlitzMenu final : public rex::ui::IDialog {
       case kScreenShape:
         Set("blitz.aspect_ratio", kShapeValues[Wrap(ShapeIndex(), dir, kShapeCount)]);
         break;
-      case kSharpen: {
-        int step = static_cast<int>(std::lround(GetF64("blitz.sharpen") * 10.0));
-        step = Wrap(step, dir, 11);  // 0..10 -> 0%..100%
-        SetF64("blitz.sharpen", step / 10.0);
-        break;
-      }
       case kFiltering:
         SetInt("gpu.anisotropic_override", kAnisoValues[Wrap(AnisoIndex(), dir, kAnisoCount)]);
         break;
-      case kVsync: SetBool("gpu.vsync", !GetBool("gpu.vsync")); break;
       case kAspect:
         SetBool("gpu.xenos.present_letterbox", !GetBool("gpu.xenos.present_letterbox"));
         break;
@@ -558,7 +535,6 @@ class BlitzMenu final : public rex::ui::IDialog {
         SetF64("apu.gain", step / 10.0);
         break;
       }
-      case kMute: SetBool("apu.mute", !GetBool("apu.mute")); break;
       case kMuteUnfocused: SetBool("apu.mute_unfocused", !GetBool("apu.mute_unfocused")); break;
       case kAudioBuffer:
         SetInt("apu.max_queued_frames", kAudioFrames[Wrap(AudioIndex(), dir, kAudioCount)]);

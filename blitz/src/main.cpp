@@ -45,6 +45,23 @@ const rex::ui::OverlayConfig kOverlays[] = {
 
 // Sets a setting at the title layer, so a config file or --name=value still wins,
 // and logs the value that ends up in effect.
+// Puts a setting back to its default when the config file holds `value` (a
+// choice the menus no longer offer). Values from the command line are kept.
+void ResetSavedChoice(std::string_view name, std::string_view value) {
+  auto& registry = rex::GetSettingsRegistry();
+  auto s = registry.Find(name);
+  if (!s || !*s) {
+    REXLOG_WARN("blitz: {} not found, could not reset it", name);
+    return;
+  }
+  if ((*s)->GetLayer() != rex::SettingLayer::kFile || (*s)->GetText() != value) return;
+  if (auto r = registry.Reset(name); !r) {
+    REXLOG_WARN("blitz: could not reset {}", name);
+    return;
+  }
+  REXLOG_INFO("blitz: {} was {} in the config file; reset to {}", name, value, (*s)->GetText());
+}
+
 void DefaultSetting(std::string_view name, std::string_view value) {
   auto& registry = rex::GetSettingsRegistry();
   if (auto r = registry.SetText(rex::SettingLayer::kTitle, name, value); !r) {
@@ -90,6 +107,15 @@ class BlitzApp : public rex::app::TitleApp {
     fp_guard_ = blitz::InstallFpGuard();
     // The SDK crash reporter is installed before OnInit; chain in front of it.
     blitz::InstallCrashDump();
+
+    // Menu rows removed: Mute (Volume 0 and "Mute in background" cover it),
+    // VSync (Off only tears, and with the SDK's guest pacing it also runs the
+    // game's vblank timer at 1000 Hz) and texture filtering "Off". A player who
+    // picked one earlier has no row left to undo it, so a value saved in the
+    // config file goes back to the default. The command line still sets them.
+    ResetSavedChoice("apu.mute", "true");
+    ResetSavedChoice("gpu.vsync", "false");
+    ResetSavedChoice("gpu.anisotropic_override", "0");
 
     // GPU defaults. Set here rather than OnConfigure because the GPU driver
     // module registers these settings.
