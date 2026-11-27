@@ -41,6 +41,10 @@ Settings
   Recommended: 2x render resolution, FXAA, 16x texture filtering. 4x render
   resolution is very heavy; the game runs in slow motion if your GPU can't
   keep up, because the game logic runs per frame.
+  "CPU waits: Smart" (the default) lets the game sleep while it waits for the
+  GPU instead of spinning a whole CPU core, as it did on the Xbox: less CPU
+  use, which helps laptops and handhelds keep their speed. "Console" brings
+  the old behaviour back.
 
 Updates
   The launcher asks GitHub for a newer release when it opens. When there is
@@ -64,6 +68,8 @@ Command-line options (every setting in blitz.toml works as --section.name=value)
                               upscaling, AMD CAS sharpening, or plain (default)
   --blitz.aspect_ratio=21:9|32:9|16:9   ultrawide: widens the 3D view (the HUD
                               keeps its layout and is stretched to fit)
+  --blitz.smart_wait=false    the Xbox's busy waits (more CPU; for testing)
+  --blitz.wait_spin_us=100 --blitz.wait_sleep_us=100   smart wait timing
   Note: options given on the command line are saved to blitz.toml if you
   change a setting in the menu during that run.
 

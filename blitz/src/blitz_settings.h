@@ -32,6 +32,13 @@ class BlitzSettings : public rex::SettingOwner {
               "ultrawide screens (the picture is stretched to the window)",
               rex::Allowed("16:9", "21:9", "32:9"), rex::kRestart);
   REX_SETTING(f64, sharpen, 0.0, "Output sharpening strength, 0 is off", rex::Range{0.0, 1.0});
+  REX_SETTING(bool, smart_wait, true,
+              "The waits for the GPU sleep after a short spin instead of keeping a core busy "
+              "(false: the console's busy waits)");
+  REX_SETTING(i32, wait_spin_us, 100, "Smart wait: spin this long before sleeping, in microseconds",
+              rex::Range{0, 5000});
+  REX_SETTING(i32, wait_sleep_us, 100, "Smart wait: length of each sleep, in microseconds",
+              rex::Range{20, 1000});
 };
 
 BlitzSettings& Settings();

@@ -5,7 +5,22 @@
 #include <rex/ppc/hook.h>
 
 #include <bit>
+#include <chrono>
 #include <cmath>
+
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#else
+#include <cerrno>
+#include <time.h>
+#endif
+#include <immintrin.h>
 
 #include "blitz_settings.h"
 
@@ -123,4 +138,83 @@ REX_HOOK_RAW(sub_82256FF8) {
     }
   }
   __imp__sub_82256FF8(ctx, base);
+}
+
+// ---------------------------------------------------------------------------
+// Smart wait (blitz.smart_wait, blitz.wait_spin_us, blitz.wait_sleep_us).
+//
+// The D3D library's GPU waits spin, which is free on the console (its db16cyc
+// hint hands the core to the other hardware thread) but keeps a whole host
+// core busy: at the profile menu one thread sat at 99% of a core, in the
+// ring-space wait sub_82449BC0 (2026-11-27). Every D3D wait loop calls
+// sub_82457430 on each pass: 8 db16cyc (nothing on the host), then the hang
+// check (5000-tick timeout); it returns 1 to keep waiting. After spinning
+// wait_spin_us, each further pass sleeps wait_sleep_us on a high-resolution
+// timer. Ported from Blitz: The League II 1.2.2 (sub_824AF628 there). Idea
+// from the Pirates of the Caribbean: At World's End and Guitar Hero: Warriors
+// of Rock ReXGlue recomps, written fresh.
+// ---------------------------------------------------------------------------
+namespace {
+using WaitClock = std::chrono::steady_clock;
+
+// Polls closer together than this belong to the same wait (sleeps are at
+// most 1 ms, the setting's maximum).
+constexpr auto kSameWaitGap = std::chrono::microseconds(1500);
+
+struct WaitState {
+  WaitClock::time_point start{};
+  WaitClock::time_point last{};
+};
+thread_local WaitState t_wait;
+
+#if defined(_WIN32)
+// This thread's high-resolution timer, closed when the thread exits.
+struct WaitTimer {
+  HANDLE handle = CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+                                         TIMER_ALL_ACCESS);
+  ~WaitTimer() {
+    if (handle) CloseHandle(handle);
+  }
+};
+#endif
+
+void SleepMicroseconds(i32 us) {
+#if defined(_WIN32)
+  thread_local WaitTimer wait_timer;
+  const HANDLE timer = wait_timer.handle;
+  if (timer) {
+    LARGE_INTEGER due;
+    due.QuadPart = -static_cast<LONGLONG>(us) * 10;  // relative, 100 ns units
+    if (SetWaitableTimer(timer, &due, 0, nullptr, nullptr, FALSE)) {
+      WaitForSingleObject(timer, INFINITE);
+      return;
+    }
+  }
+  Sleep(1);  // no high-resolution timer (Windows before 10 1803)
+#else
+  timespec ts{0, static_cast<long>(us) * 1000};
+  while (nanosleep(&ts, &ts) == -1 && errno == EINTR) {
+  }  // a signal cut it short: sleep the rest
+#endif
+}
+
+// Called on each pass of a wait that is not over yet.
+void BackOff() {
+  const auto now = WaitClock::now();
+  if (now - t_wait.last > kSameWaitGap) t_wait.start = now;
+  const auto& settings = blitz::Settings();
+  if (now - t_wait.start < std::chrono::microseconds(settings.wait_spin_us.Get())) {
+    _mm_pause();
+  } else {
+    SleepMicroseconds(settings.wait_sleep_us.Get());
+  }
+  t_wait.last = WaitClock::now();
+}
+}  // namespace
+
+REX_HOOK_RAW(sub_82457430) {
+  __imp__sub_82457430(ctx, base);
+  if (ctx.r3.u32 == 1 && blitz::Settings().smart_wait.Get()) {
+    BackOff();
+  }
 }
