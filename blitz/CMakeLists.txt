@@ -19,7 +19,7 @@ rexglue_project(blitz OUTPUT_DIR generated/default)
 
 # Host sources. src/main.cpp stays on the executable.
 set(BLITZ_HOST_SOURCES src/blitz_hooks.cpp src/blitz_look.cpp src/blitz_menu.cpp src/blitz_setup.cpp
-    src/blitz_updater.cpp src/blitz_sysinfo.cpp)
+    src/blitz_updater.cpp src/blitz_sysinfo.cpp src/blitz_spec_check.cpp)
 
 # OBJECT and never STATIC, an archive drops the REX_EXPORT symbols.
 add_library(blitz_common OBJECT ${BLITZ_HOST_SOURCES})
@@ -30,9 +30,10 @@ if (WIN32)
   target_link_libraries(blitz_common PRIVATE winhttp)  # the updater's downloads
   target_link_libraries(blitz_common PRIVATE ole32)  # sysinfo: audio output format
 endif ()
+# Menu input reads pads through SDL3 (plus XInput on Windows); the Linux file picker uses it too.
+target_link_libraries(blitz_common PRIVATE SDL3::SDL3)
 if (NOT WIN32)
-  # Menu input and the file picker use SDL3 directly on Linux (XInput on Windows).
-  target_link_libraries(blitz_common PRIVATE SDL3::SDL3)
+  target_link_libraries(blitz_common PRIVATE ${CMAKE_DL_LIBS})  # the hardware check's Vulkan query
 endif ()
 
 if (WIN32)

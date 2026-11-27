@@ -116,6 +116,15 @@
       "defaults": { "blitz/show_fps": "false" }
     },
     {
+      "id": "spec_warning", "label": "Hardware warning", "group": "Video",
+      "help": "Warns at startup when this PC is below what the game needs for full speed (built-in graphics, little video memory or RAM).",
+      "choices": [
+        { "label": "Show", "set": { "blitz/spec_warning": "true" } },
+        { "label": "Don't show", "set": { "blitz/spec_warning": "false" } }
+      ],
+      "defaults": { "blitz/spec_warning": "true" }
+    },
+    {
       "id": "smart_wait", "label": "CPU waits", "group": "Video", "advanced": true,
       "help": "Smart lets idle game threads sleep: less CPU, cooler laptops and handhelds. Console spins like the Xbox did.",
       "choices": [

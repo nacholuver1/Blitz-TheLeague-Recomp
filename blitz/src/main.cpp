@@ -12,6 +12,7 @@
 #include "blitz_menu.h"
 #include "blitz_settings.h"
 #include "blitz_setup.h"
+#include "blitz_spec_check.h"
 #include "blitz_sysinfo.h"
 #include "blitz_updater.h"
 #include "generated/default/blitz_init.h"
@@ -153,6 +154,31 @@ class BlitzApp : public rex::app::TitleApp {
       GetUI().ShowOverlay("debug", true);
     }
     return TitleApp::OnInit();
+  }
+
+  // Hardware check: logs what the PC has and, below the bar, shows one warning
+  // screen (every start path, RecompLauncher included; not again after the
+  // launcher's own restart). Returns false when the player quits instead.
+  bool RunSpecCheck() {
+    blitz::SpecReport report = blitz::CheckSpecs();
+    const bool test = blitz::Settings().spec_warning_test.Get();
+    if (test && report.reasons.empty()) report.reasons.push_back("(test) this PC meets the bar");
+    if (report.reasons.empty() || (!blitz::Settings().spec_warning.Get() && !test)) return true;
+    if (const char* shown = std::getenv("REX_BLITZ_SPEC_SHOWN"); shown && *shown) return true;
+#ifdef _WIN32
+    SetEnvironmentVariableW(L"REX_BLITZ_SPEC_SHOWN", L"1");
+#else
+    setenv("REX_BLITZ_SPEC_SHOWN", "1", 1);
+#endif
+    std::atomic<blitz::SpecChoice> choice{blitz::SpecChoice::kPending};
+    auto dialog = blitz::MakeSpecWarning(choice, std::move(report));
+    {
+      auto guard = GetUI().AddDialog(*dialog);
+      dialog->OnShow();
+      while (choice.load() == blitz::SpecChoice::kPending && RunFrame()) {
+      }
+    }
+    return choice.load() == blitz::SpecChoice::kPlay;
   }
 
   // First run (or a missing / wrong game folder): asks for the player's own disc
@@ -330,7 +356,7 @@ int BlitzMain(BlitzApp& app, const rex::CLIArgList& args) {
   blitz::updater::Init(rex::platform::GetExecutablePath(), args.GetAll());
   if (app.Init(args)) {
     // system info after the launcher, so the log shows the options the game starts with
-    if (app.RunSetup() && app.RunLauncher() && (blitz::LogSystemInfo(), app.LaunchTitle())) {
+    if (app.RunSpecCheck() && app.RunSetup() && app.RunLauncher() && (blitz::LogSystemInfo(), app.LaunchTitle())) {
       app.StartInGameMenu();
       app.Run();
     }

@@ -15,9 +15,8 @@
 #ifdef _WIN32
 #include <Windows.h>
 #include <Xinput.h>
-#else
-#include <SDL3/SDL.h>
 #endif
+#include <SDL3/SDL.h>
 
 namespace blitz::ui {
 
@@ -63,11 +62,19 @@ inline bool OurWindowInFront() {
 inline bool KeyDown(int vk) { return (GetAsyncKeyState(vk) & 0x8000) != 0; }
 #endif
 
-#ifndef _WIN32
-// SDL3 (the SDK's window and input backend on Linux). Gamepads the SDK has
-// not opened are opened once here; SDL keeps them open.
+// SDL3 (the SDK's window and input backend). It also sees pads XInput doesn't
+// (DirectInput/HID modes, PlayStation and Switch pads). Gamepads the SDK has
+// not opened are opened once here; SDL keeps them open. The setup screen and the
+// launcher run before the SDK's input driver starts SDL's gamepad subsystem, so
+// start it here (SDL counts the starts; the SDK's own start later is harmless).
 template <typename Fn>
 void ForEachGamepad(Fn&& fn) {
+  if (!SDL_WasInit(SDL_INIT_GAMEPAD)) {
+    static bool tried = false;
+    if (tried) return;
+    tried = true;
+    if (!SDL_InitSubSystem(SDL_INIT_GAMEPAD)) return;
+  }
   int count = 0;
   SDL_JoystickID* ids = SDL_GetGamepads(&count);
   if (!ids) return;
@@ -78,7 +85,31 @@ void ForEachGamepad(Fn&& fn) {
   }
   SDL_free(ids);
 }
-#endif
+
+inline void ReadSdlPads(InputState& s) {
+  ForEachGamepad([&s](SDL_Gamepad* pad) {
+    const auto b = [pad](SDL_GamepadButton btn) { return SDL_GetGamepadButton(pad, btn); };
+    const Sint16 lx = SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFTX);
+    const Sint16 ly = SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFTY);  // + is down
+    s.up |= b(SDL_GAMEPAD_BUTTON_DPAD_UP) || ly < -16000;
+    s.down |= b(SDL_GAMEPAD_BUTTON_DPAD_DOWN) || ly > 16000;
+    s.left |= b(SDL_GAMEPAD_BUTTON_DPAD_LEFT) || lx < -16000;
+    s.right |= b(SDL_GAMEPAD_BUTTON_DPAD_RIGHT) || lx > 16000;
+    s.accept |= b(SDL_GAMEPAD_BUTTON_SOUTH) || b(SDL_GAMEPAD_BUTTON_START);
+    s.back |= b(SDL_GAMEPAD_BUTTON_EAST);
+  });
+}
+
+inline bool SdlChordDown() {
+  bool down = false;
+  ForEachGamepad([&down](SDL_Gamepad* pad) {
+    const auto b = [pad](SDL_GamepadButton btn) { return SDL_GetGamepadButton(pad, btn); };
+    down |= b(SDL_GAMEPAD_BUTTON_GUIDE) ||
+            (b(SDL_GAMEPAD_BUTTON_LEFT_SHOULDER) && b(SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER) &&
+             b(SDL_GAMEPAD_BUTTON_BACK));
+  });
+  return down;
+}
 
 inline InputState ReadInput() {
   InputState s{};
@@ -115,18 +146,8 @@ inline InputState ReadInput() {
     s.accept = k[SDL_SCANCODE_RETURN] || k[SDL_SCANCODE_SPACE];
     s.back = k[SDL_SCANCODE_ESCAPE] || k[SDL_SCANCODE_BACKSPACE];
   }
-  ForEachGamepad([&s](SDL_Gamepad* pad) {
-    const auto b = [pad](SDL_GamepadButton btn) { return SDL_GetGamepadButton(pad, btn); };
-    const Sint16 lx = SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFTX);
-    const Sint16 ly = SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFTY);  // + is down
-    s.up |= b(SDL_GAMEPAD_BUTTON_DPAD_UP) || ly < -16000;
-    s.down |= b(SDL_GAMEPAD_BUTTON_DPAD_DOWN) || ly > 16000;
-    s.left |= b(SDL_GAMEPAD_BUTTON_DPAD_LEFT) || lx < -16000;
-    s.right |= b(SDL_GAMEPAD_BUTTON_DPAD_RIGHT) || lx > 16000;
-    s.accept |= b(SDL_GAMEPAD_BUTTON_SOUTH) || b(SDL_GAMEPAD_BUTTON_START);
-    s.back |= b(SDL_GAMEPAD_BUTTON_EAST);
-  });
 #endif
+  ReadSdlPads(s);
   return s;
 }
 
@@ -144,14 +165,8 @@ inline bool MenuChordDown() {
       down |= (b & kGuideButton) != 0 || (b & chord) == chord;
     }
   }
-#else
-  ForEachGamepad([&down](SDL_Gamepad* pad) {
-    const auto b = [pad](SDL_GamepadButton btn) { return SDL_GetGamepadButton(pad, btn); };
-    down |= b(SDL_GAMEPAD_BUTTON_GUIDE) ||
-            (b(SDL_GAMEPAD_BUTTON_LEFT_SHOULDER) && b(SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER) &&
-             b(SDL_GAMEPAD_BUTTON_BACK));
-  });
 #endif
+  down |= SdlChordDown();
   return down;
 }
 

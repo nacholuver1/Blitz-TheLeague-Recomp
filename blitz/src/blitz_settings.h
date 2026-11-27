@@ -17,6 +17,12 @@ class BlitzSettings : public rex::SettingOwner {
 
   REX_SETTING(bool, show_fps, false, "Show the FPS counter (debug overlay) at startup");
   REX_SETTING(bool, launcher, true, "Show the launcher menu before the game starts");
+  REX_SETTING(bool, spec_warning, true,
+              "At startup, warn when the PC is below what the game needs for full speed "
+              "(integrated graphics, under 4 GB of video memory, 8 GB of RAM or 6 CPU threads)");
+  REX_SETTING(bool, spec_warning_test, false,
+              "Show the hardware warning even on a PC that meets the bar (for testing)",
+              rex::kNoSave);
   REX_SETTING(bool, check_updates, true,
               "The launcher asks GitHub for a newer release and offers to install it");
   REX_SETTING(std::filesystem::path, iso, "",
