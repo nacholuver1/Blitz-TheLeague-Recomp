@@ -69,6 +69,11 @@ class BlitzApp : public rex::app::TitleApp {
     // Hide the mouse cursor after 2 s without movement (the SDK default never
     // hides it, so it sat over the game). Moving the mouse brings it back.
     DefaultSetting("ui.cursor_timeout", "2");
+    // Only user 0 has the signed-in profile. With a second (idle) pad in slot 0 the
+    // player's pad sat in slot 1 and the game said the profile couldn't be saved
+    // (player report). The first pad to press a button becomes user 0 instead.
+    // Startup-only, so it must be set here, before the config file loads.
+    DefaultSetting("hid.first_press_is_user0", "true");
     // The SDK writes app.root into blitz.toml. Lock it to the exe's folder so
     // a moved or renamed game folder keeps its saves/cache/logs with it.
     if (auto r = settings.SetText(rex::SettingLayer::kLock, "app.root",

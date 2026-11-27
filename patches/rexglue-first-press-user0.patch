@@ -1,0 +1,106 @@
+diff --git a/include/rex/hid/input_system.h b/include/rex/hid/input_system.h
+index 9aef69e..4f1e621 100644
+--- a/include/rex/hid/input_system.h
++++ b/include/rex/hid/input_system.h
+@@ -35,6 +35,10 @@ class REX_HID_API InputSettings final : public SettingOwner {
+   REX_SETTING(std::string, drivers, "sdl3", "Input drivers in priority order, comma separated",
+               kStartupOnly);
+   REX_SETTING(bool, shared_pads, false, "Every pad feeds user 0", kStartupOnly);
++  REX_SETTING(bool, first_press_is_user0, false,
++              "The first pad to press a button becomes user 0 (the signed-in player), once per "
++              "session; an idle pad that held user 0 moves to the freed user",
++              kStartupOnly);
+   REX_SETTING(bool, vibration, true, "Allow vibration");
+   REX_SETTING(bool, guide_button, false, "Pass the guide button to the title");
+   REX_SETTING(f64, left_stick_deadzone, 0.0, "Left stick deadzone", Range{0.0, 1.0});
+diff --git a/src/hid/input_system.cpp b/src/hid/input_system.cpp
+index 5ec15f9..6352870 100644
+--- a/src/hid/input_system.cpp
++++ b/src/hid/input_system.cpp
+@@ -78,6 +78,7 @@ struct InputSystem::State {
+   std::array<u32, detail::kMaxUsers> packet{};
+   std::array<rex::hid::PadState, detail::kMaxUsers> last_state{};
+   std::array<u64, detail::kMaxUsers> last_signature{};
++  bool user0_claimed = false; /**< first_press_is_user0: user 0 is settled for the session. */
+   std::atomic<i32> ui_blocks{0};
+ 
+   std::atomic<bool> focused{true};
+@@ -105,6 +106,7 @@ struct InputSystem::State {
+   }
+ 
+   void RefreshDevicesLocked(std::vector<ConnectionEvent>& events);
++  void ClaimUser0Locked(std::vector<ConnectionEvent>& events);
+   const detail::Device* FindDeviceLocked(const detail::DeviceKey& key) const;
+   bool ChooseDeviceLocked(u32 user, detail::DeviceKey& out) const;
+   Result<rex::hid::PadState> ReadRawLocked(u32 user);
+@@ -128,6 +130,7 @@ void InputSystem::State::RefreshDevicesLocked(std::vector<ConnectionEvent>& even
+     current = revisions[i] == sources[i]->GetDeviceRevision();
+   }
+   if (current) {
++    ClaimUser0Locked(events);
+     return;
+   }
+   revisions.resize(sources.size());
+@@ -170,6 +173,62 @@ void InputSystem::State::RefreshDevicesLocked(std::vector<ConnectionEvent>& even
+   devices = std::move(seen);
+   users = detail::AssignUsers(devices, owner.GetSettings().shared_pads.Get());
+   UpdateConnectionsLocked(events);
++  ClaimUser0Locked(events);
++}
++
++// first_press_is_user0: only user 0 has the signed-in profile, so a player whose pad sits in a
++// later slot (an idle second pad took slot 0) cannot save. Until some input arrives, every call
++// checks all pads; the first pad with input takes ordinal 0 and the pad that held it takes the
++// freed ordinal. Runs before the read in the same call, so the game sees that press on user 0.
++// Settles once per session: later presses (a versus opponent) never reshuffle.
++void InputSystem::State::ClaimUser0Locked(std::vector<ConnectionEvent>& events) {
++  if (user0_claimed) {
++    return;
++  }
++  const auto& settings = owner.GetSettings();
++  if (!settings.first_press_is_user0.Get() || settings.shared_pads.Get()) {
++    user0_claimed = true;
++    return;
++  }
++  detail::Device* first = nullptr;
++  for (detail::Device& device : devices) {
++    // Keyboard and mouse always feed user 0 and never claim: a mouse moved over the window
++    // first must not settle the slots before the player's pad is used.
++    if (!device.counts || device.synthetic) {
++      continue;
++    }
++    auto state = sources[device.key.source]->GetDeviceState(device.key.id);
++    if (state && !detail::IsNeutral(*state)) {
++      first = &device;
++      break;
++    }
++  }
++  if (!first) {
++    return;
++  }
++  user0_claimed = true;
++  if (first->ordinal == 0) {
++    return;
++  }
++  const u32 freed = first->ordinal;
++  for (detail::Device& device : devices) {
++    if (!device.synthetic && device.ordinal == 0) {
++      device.ordinal = freed;
++    }
++  }
++  first->ordinal = 0;
++  REXHID_INFO("Controller in user {} pressed first; it is user 0 now, user 0's pad moves to {}.",
++              freed, freed);
++  // Per-user input state follows its pad. The packet number changes by itself: the device
++  // signature of both users changes, so the next read of each counts as a new packet.
++  std::swap(consumed[0], consumed[freed]);
++  std::swap(synth[0], synth[freed]);
++  std::swap(last_state[0], last_state[freed]);
++  std::ranges::stable_sort(devices, [](const detail::Device& a, const detail::Device& b) {
++    return a.ordinal < b.ordinal;
++  });
++  users = detail::AssignUsers(devices, settings.shared_pads.Get());
++  UpdateConnectionsLocked(events);
+ }
+ 
+ void InputSystem::State::UpdateConnectionsLocked(std::vector<ConnectionEvent>& events) {
