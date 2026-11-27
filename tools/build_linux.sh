@@ -17,10 +17,16 @@ case "$action" in
   sdk)
     cd "$SDK"
     for p in rexglue-dcbz-128 rexglue-audio-diag rexglue-ffx-present rexglue-first-press-user0; do
-      if git apply --check "$ROOT/patches/$p.patch" 2>/dev/null; then
+      # A later patch can change lines an earlier one added, so its reverse check fails once
+      # both are in: patches applied here are recorded in a stamp file and skipped after that.
+      if grep -qxF "$p" .blitz-applied-patches 2>/dev/null; then
+        echo "already applied: $p"
+      elif git apply --check "$ROOT/patches/$p.patch" 2>/dev/null; then
         git apply "$ROOT/patches/$p.patch"
+        echo "$p" >> .blitz-applied-patches
         echo "applied $p"
       elif git apply --reverse --check "$ROOT/patches/$p.patch" 2>/dev/null; then
+        echo "$p" >> .blitz-applied-patches
         echo "already applied: $p"
       else
         echo "patch $p does not apply to this SDK version" >&2
