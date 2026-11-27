@@ -46,7 +46,13 @@ constexpr unsigned kMinThreads = 6;
 // hand (stable C ABI) so this file doesn't need the Vulkan headers or an import.
 using VkInstanceH = void*;
 using VkPhysicalDeviceH = void*;
-using VkFn = void (*)();
+// VKAPI_CALL: __stdcall on 32-bit Windows, the default everywhere else.
+#if defined(_WIN32) && !defined(_WIN64)
+#define BLITZ_VKAPI __stdcall
+#else
+#define BLITZ_VKAPI
+#endif
+using VkFn = void(BLITZ_VKAPI*)();
 struct VkInstanceCreateInfoMin {
   uint32_t sType;  // VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO = 1
   const void* pNext;
@@ -57,11 +63,11 @@ struct VkInstanceCreateInfoMin {
   uint32_t enabledExtensionCount;
   const char* const* ppEnabledExtensionNames;
 };
-using PFN_GetInstanceProcAddr = VkFn (*)(VkInstanceH, const char*);
-using PFN_CreateInstance = int32_t (*)(const VkInstanceCreateInfoMin*, const void*, VkInstanceH*);
-using PFN_DestroyInstance = void (*)(VkInstanceH, const void*);
-using PFN_EnumeratePhysicalDevices = int32_t (*)(VkInstanceH, uint32_t*, VkPhysicalDeviceH*);
-using PFN_GetProperties = void (*)(VkPhysicalDeviceH, void*);
+using PFN_GetInstanceProcAddr = VkFn(BLITZ_VKAPI*)(VkInstanceH, const char*);
+using PFN_CreateInstance = int32_t(BLITZ_VKAPI*)(const VkInstanceCreateInfoMin*, const void*, VkInstanceH*);
+using PFN_DestroyInstance = void(BLITZ_VKAPI*)(VkInstanceH, const void*);
+using PFN_EnumeratePhysicalDevices = int32_t(BLITZ_VKAPI*)(VkInstanceH, uint32_t*, VkPhysicalDeviceH*);
+using PFN_GetProperties = void(BLITZ_VKAPI*)(VkPhysicalDeviceH, void*);
 // VkPhysicalDeviceProperties: deviceType at 16, deviceName[256] at 20.
 // VkPhysicalDeviceMemoryProperties: memoryHeapCount at 260, heaps {u64 size,
 // u32 flags} of 16 bytes from 264; flag 1 = device local.
