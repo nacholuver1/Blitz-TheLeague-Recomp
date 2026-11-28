@@ -37,9 +37,17 @@ using namespace blitz::ui;
 // Below these the game runs well under full speed (player reports: Intel UHD on an
 // i3-N305; Ryzen Z1 Extreme handheld). A dedicated card from the GTX 1060 / RX 580
 // generation up holds 60 fps at 1x-2x.
+// Since 30 fps mode (two game steps per drawn frame) keeps full game speed on a PC
+// that draws 30, this is the bar for 60 fps; below it the first start recommends
+// 30. Built-in graphics stays on this side: handhelds (Steam Deck, Ryzen Z1) are
+// built-in graphics and are what 30 fps mode is for.
 constexpr double kMinVramGiB = 3.5;  // "4 GB" cards report a little under 4
 constexpr double kMinRamGiB = 7.0;   // "8 GB" PCs report 7.4-7.9
 constexpr unsigned kMinThreads = 6;
+// Below these even 30 fps is unlikely: the "may be too slow" warning.
+constexpr double kMin30VramGiB = 1.5;  // "2 GB" cards
+constexpr double kMin30RamGiB = 5.5;   // "6 GB"
+constexpr unsigned kMin30Threads = 4;
 
 // ------------------------------------------------------------------ GPU via Vulkan
 // The game renders with Vulkan. The few loader calls needed here are declared by
@@ -161,24 +169,31 @@ std::string Fmt(const char* f, double v) {
 enum Row { kPlay, kNeverAgain, kQuit, kRowCount };
 const char* RowLabel(int row, bool ask_frame_rate) {
   switch (row) {
-    case kPlay: return ask_frame_rate ? "Play at 30 fps (recommended for this PC)" : "Play anyway";
+    case kPlay: return ask_frame_rate ? "Play at 30 fps (recommended)" : "Play anyway";
     case kNeverAgain: return ask_frame_rate ? "Play at 60 fps" : "Play, and don't show this again";
     default: return "Quit";
   }
 }
 
-constexpr const char* kIntro =
+// Below the 60 fps bar (first start): recommend 30 fps.
+constexpr const char* kIntro30 =
     "Blitz recreates the Xbox 360's graphics chip on your PC's graphics card, which takes a "
-    "lot of graphics power. This PC is below what the game needs, so it will likely run slowly "
-    "or stutter, especially in matches:";
-constexpr const char* kAdvice =
-    "Full speed needs a dedicated graphics card (GTX 1060 / RX 580 or newer), 8 GB of RAM and a "
-    "6-thread CPU. If you play anyway: keep Render resolution at 1x and close overlay and "
-    "recording apps.";
-constexpr const char* kFrameRateAdvice =
-    "The game's speed is tied to its frame rate: below 60 fps it plays in slow motion. 30 fps "
-    "keeps full game speed by drawing every other frame. You can change it later under Frame "
-    "rate in the launcher or the F1 menu.";
+    "lot of graphics power. This PC may not hold 60 fps, and below 60 the game plays in slow "
+    "motion:";
+constexpr const char* kAdvice30 =
+    "30 fps mode keeps full game speed by drawing every other frame, so the PC only needs to "
+    "draw 30. 60 fps needs a dedicated graphics card (GTX 1060 / RX 580 or newer), 8 GB of "
+    "RAM and a 6-thread CPU. You can change it later under Frame rate in the launcher or the "
+    "F1 menu.";
+// Below the 30 fps bar.
+constexpr const char* kIntroSlow =
+    "Blitz recreates the Xbox 360's graphics chip on your PC's graphics card, which takes a "
+    "lot of graphics power. This PC is likely below what the game needs even at 30 fps, so it "
+    "may run in slow motion or stutter, especially in matches:";
+constexpr const char* kAdviceSlow =
+    "If you play anyway: use Frame rate 30 fps, keep Render resolution at 1x and close overlay "
+    "and recording apps. 30 fps needs at least a real graphics chip with Vulkan, 6 GB of RAM "
+    "and a 4-thread CPU.";
 
 class SpecDialog final : public rex::ui::IDialog {
  public:
@@ -220,27 +235,27 @@ class SpecDialog final : public rex::ui::IDialog {
     const auto wrapped_h = [&](const char* s) {
       return p.font->CalcTextSizeA(p.size * 0.8f, FLT_MAX, tw, s).y;
     };
-    const float ph = lh * 2.6f + wrapped_h(kIntro) + lh * (report_.reasons.size() + 0.8f) +
-                     wrapped_h(kAdvice) + lh * (static_cast<float>(kRowCount) + 2.6f) +
-                     (ask_frame_rate_ ? wrapped_h(kFrameRateAdvice) + lh * 0.3f : 0.0f);
+    const bool slow = report_.below_30;
+    const char* intro = slow ? kIntroSlow : kIntro30;
+    const char* advice = slow ? kAdviceSlow : kAdvice30;
+    const float ph = lh * 2.6f + wrapped_h(intro) + lh * (report_.reasons.size() + 0.8f) +
+                     wrapped_h(advice) + lh * (static_cast<float>(kRowCount) + 2.6f);
     const float px = (io.DisplaySize.x - pw) / 2, py = std::max(8 * scale, (io.DisplaySize.y - ph) / 2);
 
     p.Rect(0, 0, io.DisplaySize.x, io.DisplaySize.y, kBackdrop);
     p.Rect(px, py, pw, ph, kPanel);
     p.Rect(px, py, pw, 3 * scale, kAccent);
-    p.Text(px + tx, py + 12 * scale, "YOUR PC MAY BE TOO SLOW", kAccent, 1.6f);
+    p.Text(px + tx, py + 12 * scale, slow ? "YOUR PC MAY BE TOO SLOW" : "30 FPS RECOMMENDED", kAccent,
+           1.6f);
     p.Text(px + tx, py + 12 * scale + lh * 1.45f, "Blitz: The League hardware check", kGrey, 0.8f);
     float y = py + 14 * scale + lh * 2.6f;
-    y += p.Wrapped(px + tx, y, tw, kIntro, kGrey, 0.8f) + lh * 0.3f;
+    y += p.Wrapped(px + tx, y, tw, intro, kGrey, 0.8f) + lh * 0.3f;
     for (const std::string& r : report_.reasons) {
       p.Text(px + tx + 16 * scale, y, ("-  " + r).c_str(), kWhite, 0.85f);
       y += lh;
     }
     y += lh * 0.3f;
-    y += p.Wrapped(px + tx, y, tw, kAdvice, kGrey, 0.8f) + lh * 0.6f;
-    if (ask_frame_rate_) {
-      y += p.Wrapped(px + tx, y, tw, kFrameRateAdvice, kWhite, 0.8f) + lh * 0.6f;
-    }
+    y += p.Wrapped(px + tx, y, tw, advice, slow ? kGrey : kWhite, 0.8f) + lh * 0.6f;
 
     int activate = -1;
     for (int i = 0; i < kRowCount; i++) {
@@ -259,15 +274,13 @@ class SpecDialog final : public rex::ui::IDialog {
     ImGui::End();
 
     if (ask_frame_rate_ && (activate == kPlay || activate == kNeverAgain)) {
-      // The frame-rate question is asked once: the answer is saved, and the
-      // warning is not shown again (the launcher's Frame rate row changes it).
+      // The frame-rate question is asked once: the answer is saved (the launcher's
+      // Frame rate row changes it). Below the 30 fps bar the "may be too slow"
+      // warning still shows on later starts, until "Don't show this again".
       auto& reg = rex::GetSettingsRegistry();
       const char* mode = activate == kPlay ? "30" : "60";
       if (auto r = reg.SetText("blitz.frame_mode", mode); !r) {
         REXLOG_WARN("blitz: could not set the frame rate");
-      }
-      if (auto r = reg.SetText("blitz.spec_warning", "false"); !r) {
-        REXLOG_WARN("blitz: could not turn off the hardware warning");
       }
       if (auto s = reg.Save(REX_PATHS().config_file.Get()); !s) {
         REXLOG_WARN("blitz: could not save settings");
@@ -328,26 +341,39 @@ SpecReport CheckSpecs() {
 
   if (gpu) {
     r.gpu = gpu->name;
-    if (gpu->type != kTypeDiscrete) {
-      r.reasons.push_back((gpu->type == kTypeIntegrated ? "Built-in graphics: " : "No dedicated graphics card: ") +
-                          gpu->name);
+    if (gpu->type == kTypeIntegrated) {
+      r.reasons.push_back("Built-in graphics: " + gpu->name);
+    } else if (gpu->type != kTypeDiscrete) {
+      // A software or virtual device: no real graphics chip found.
+      r.reasons.push_back("No graphics chip found, only: " + gpu->name);
+      r.below_30 = true;
     } else if (gpu->vram_gib > 0 && gpu->vram_gib < kMinVramGiB) {
-      r.reasons.push_back(Fmt("Graphics card with %.0f GB of memory (4 GB or more needed): ",
+      r.reasons.push_back(Fmt("Graphics card with %.0f GB of memory (4 GB for 60 fps): ",
                               std::max(1.0, gpu->vram_gib + 0.3)) + gpu->name);
+      if (gpu->vram_gib < kMin30VramGiB) r.below_30 = true;
     }
+  } else {
+    // The check could not see the graphics card (no Vulkan driver, or none listed).
+    // The game may still run (Direct3D 12), so this recommends 30 fps rather than
+    // warning that the PC is too slow.
+    r.reasons.push_back("Graphics card could not be checked (no Vulkan device found)");
   }
   if (ram > 0 && ram < kMinRamGiB) {
-    r.reasons.push_back(Fmt("%.0f GB of RAM (8 GB or more needed)", std::max(1.0, ram + 0.3)));
+    r.reasons.push_back(Fmt("%.0f GB of RAM (8 GB for 60 fps)", std::max(1.0, ram + 0.3)));
+    if (ram < kMin30RamGiB) r.below_30 = true;
   }
   if (threads > 0 && threads < kMinThreads) {
-    r.reasons.push_back(Fmt("%.0f CPU threads (6 or more needed)", threads));
+    r.reasons.push_back(Fmt("%.0f CPU threads (6 for 60 fps)", threads));
+    if (threads < kMin30Threads) r.below_30 = true;
   }
 
   REXLOG_INFO("blitz: hardware check: GPU '{}' ({}, {:.1f} GB), RAM {:.1f} GB, {} CPU threads: {}",
               gpu ? gpu->name : "none found",
               !gpu ? "-" : gpu->type == kTypeDiscrete ? "dedicated" : gpu->type == kTypeIntegrated ? "integrated" : "other",
               gpu ? gpu->vram_gib : 0.0, ram, threads,
-              r.reasons.empty() ? "meets the bar" : "BELOW the bar");
+              r.below_30         ? "BELOW the 30 fps bar"
+              : r.reasons.empty() ? "meets the 60 fps bar"
+                                  : "below the 60 fps bar (30 fps recommended)");
   return r;
 }
 

@@ -156,20 +156,25 @@ class BlitzApp : public rex::app::TitleApp {
     return TitleApp::OnInit();
   }
 
-  // Hardware check: logs what the PC has and, below the bar, shows one warning
-  // screen (every start path, RecompLauncher included; not again after the
-  // launcher's own restart). Returns false when the player quits instead.
+  // Hardware check: logs what the PC has and shows at most one screen (every
+  // start path, RecompLauncher included; not again after the launcher's own
+  // restart). Below the 60 fps bar with blitz.frame_mode never set (first start,
+  // or an update from before it): asks once, 30 fps recommended. Below the 30 fps
+  // bar: the "may be too slow" warning, until "Don't show this again". Returns
+  // false when the player quits instead.
   bool RunSpecCheck() {
     blitz::SpecReport report = blitz::CheckSpecs();
     const bool test = blitz::Settings().spec_warning_test.Get();
-    if (test && report.reasons.empty()) report.reasons.push_back("(test) this PC meets the bar");
-    // blitz.frame_mode never set (first start, or an update from before it): a PC
-    // below the bar is asked once, 30 fps recommended. Otherwise it stays 60.
-    const bool ask_frame_rate =
-        !report.reasons.empty() && blitz::Settings().frame_mode.GetLayer() == rex::SettingLayer::kDefault;
-    if (report.reasons.empty() || (!blitz::Settings().spec_warning.Get() && !test && !ask_frame_rate)) {
-      return true;
+    const bool test_slow = blitz::Settings().spec_warning_test_slow.Get();
+    if ((test || test_slow) && report.reasons.empty()) {
+      report.reasons.push_back("(test) this PC meets the bar");
     }
+    if (test_slow) report.below_30 = true;
+    const bool ask_frame_rate =
+        !report.reasons.empty() &&
+        (test || blitz::Settings().frame_mode.GetLayer() == rex::SettingLayer::kDefault);
+    const bool warn_slow = report.below_30 && (blitz::Settings().spec_warning.Get() || test_slow);
+    if (!ask_frame_rate && !warn_slow) return true;
     if (const char* shown = std::getenv("REX_BLITZ_SPEC_SHOWN"); shown && *shown) return true;
 #ifdef _WIN32
     SetEnvironmentVariableW(L"REX_BLITZ_SPEC_SHOWN", L"1");

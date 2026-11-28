@@ -21,19 +21,23 @@ namespace blitz {
 
 struct SpecReport {
   std::string gpu;                   // name of the GPU the game will likely use
-  std::vector<std::string> reasons;  // empty: nothing below the bar
+  std::vector<std::string> reasons;  // empty: holds 60 fps (nothing below the bar)
+  bool below_30 = false;             // likely can't even draw 30 fps
 };
 
 // Reads the GPU (through the Vulkan loader), RAM and CPU threads, logs one line
-// with what it found, and lists each reason the PC is below the bar.
+// with what it found, and lists each reason the PC is below the 60 fps bar.
+// below_30 marks a PC that likely can't draw 30 fps either (no real graphics
+// device, a card with under 2 GB, under 6 GB of RAM or under 4 CPU threads).
 SpecReport CheckSpecs();
 
 enum class SpecChoice : int { kPending = 0, kPlay = 1, kQuit = 2 };
 
-// Warning screen: Play anyway / Don't show again (saves blitz.spec_warning =
-// false, then plays) / Quit. With ask_frame_rate (first start, blitz.frame_mode
-// never set): Play at 30 fps (recommended) / Play at 60 fps / Quit; either play
-// choice saves blitz.frame_mode and turns the warning off.
+// Hardware screen. With ask_frame_rate (first start on a PC below the 60 fps
+// bar, blitz.frame_mode never set): Play at 30 fps (recommended) / Play at 60 fps
+// / Quit; either play choice saves blitz.frame_mode. Otherwise (below_30 only):
+// Play anyway / Don't show again (saves blitz.spec_warning = false) / Quit. The
+// title says "30 fps recommended", or "may be too slow" when below_30.
 std::unique_ptr<rex::ui::IDialog> MakeSpecWarning(std::atomic<SpecChoice>& choice,
                                                   SpecReport report, bool ask_frame_rate);
 

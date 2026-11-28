@@ -18,10 +18,15 @@ class BlitzSettings : public rex::SettingOwner {
   REX_SETTING(bool, show_fps, false, "Show the FPS counter (debug overlay) at startup");
   REX_SETTING(bool, launcher, true, "Show the launcher menu before the game starts");
   REX_SETTING(bool, spec_warning, true,
-              "At startup, warn when the PC is below what the game needs for full speed "
-              "(integrated graphics, under 4 GB of video memory, 8 GB of RAM or 6 CPU threads)");
+              "At startup, warn when the PC is likely too slow even at 30 fps (no real graphics "
+              "chip, a card with under 2 GB, under 6 GB of RAM or under 4 CPU threads). Below "
+              "the 60 fps bar the first start asks once whether to play at 30 fps");
   REX_SETTING(bool, spec_warning_test, false,
-              "Show the hardware warning even on a PC that meets the bar (for testing)",
+              "Show the first-start 30 fps question even on a PC that meets the bar or "
+              "already answered it (for testing)",
+              rex::kNoSave);
+  REX_SETTING(bool, spec_warning_test_slow, false,
+              "Show the 'may be too slow' warning even on a PC above the 30 fps bar (for testing)",
               rex::kNoSave);
   REX_SETTING(bool, check_updates, true,
               "The launcher asks GitHub for a newer release and offers to install it");

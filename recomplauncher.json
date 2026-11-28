@@ -126,7 +126,7 @@
     },
     {
       "id": "spec_warning", "label": "Hardware warning", "group": "Video",
-      "help": "Warns at startup when this PC is below what the game needs for full speed (built-in graphics, little video memory or RAM).",
+      "help": "Warns at startup when this PC is likely too slow even at 30 fps (no real graphics chip, very little video memory or RAM, or few CPU threads). PCs that only miss 60 fps are asked once at first start whether to play at 30 fps.",
       "choices": [
         { "label": "Show", "set": { "blitz/spec_warning": "true" } },
         { "label": "Don't show", "set": { "blitz/spec_warning": "false" } }
