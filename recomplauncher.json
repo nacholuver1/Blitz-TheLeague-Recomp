@@ -56,6 +56,15 @@
       "defaults": { "gpu/resolution_scale_x": "1", "gpu/resolution_scale_y": "1" }
     },
     {
+      "id": "frame_rate", "label": "Frame rate", "group": "Video",
+      "help": "The game's speed is tied to its frame rate: below 60 fps it plays in slow motion. 30 fps keeps full game speed on PCs that can't hold 60 (two game steps per drawn frame).",
+      "choices": [
+        { "label": "60 fps (original)", "set": { "blitz/frame_mode": "\"60\"" } },
+        { "label": "30 fps", "set": { "blitz/frame_mode": "\"30\"" } }
+      ],
+      "defaults": { "blitz/frame_mode": "\"60\"" }
+    },
+    {
       "id": "aa", "label": "Anti-aliasing", "group": "Video",
       "help": "FXAA smooths jagged edges.",
       "choices": [

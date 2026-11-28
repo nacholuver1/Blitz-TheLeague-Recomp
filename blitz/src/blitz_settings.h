@@ -47,9 +47,24 @@ class BlitzSettings : public rex::SettingOwner {
               rex::Range{0, 5000});
   REX_SETTING(i32, wait_sleep_us, 100, "Smart wait: length of each sleep, in microseconds",
               rex::Range{20, 1000});
+  REX_SETTING(bool, audio_barrier_fix, true,
+              "Fix for sound stopping for good: the game's audio threads meet at a barrier that "
+              "can lock up when Windows pauses one of them at the wrong moment (false: the "
+              "console's barrier)");
+  REX_SETTING(bool, frame_diag, false,
+              "Diagnostic: log the frame task once a second (passes, renders skipped, game "
+              "steps, presents, game mode)",
+              rex::kNoSave);
+  REX_SETTING(std::string, frame_mode, "60",
+              "Frame rate: 60 (the game's own) or 30 (two game steps per drawn frame, locked to "
+              "every other vblank: full game speed on PCs that can't hold 60). Not set: the "
+              "first-start hardware check asks on a PC below the bar",
+              rex::Allowed("60", "30"));
 };
 
 BlitzSettings& Settings();
+
+inline bool FrameMode30() { return Settings().frame_mode.Get() == "30"; }
 
 // Width / height of the 3D view for blitz.aspect_ratio. 21:9 is 64:27 (2560x1080; 3440x1440
 // is within 1%).

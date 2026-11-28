@@ -163,7 +163,13 @@ class BlitzApp : public rex::app::TitleApp {
     blitz::SpecReport report = blitz::CheckSpecs();
     const bool test = blitz::Settings().spec_warning_test.Get();
     if (test && report.reasons.empty()) report.reasons.push_back("(test) this PC meets the bar");
-    if (report.reasons.empty() || (!blitz::Settings().spec_warning.Get() && !test)) return true;
+    // blitz.frame_mode never set (first start, or an update from before it): a PC
+    // below the bar is asked once, 30 fps recommended. Otherwise it stays 60.
+    const bool ask_frame_rate =
+        !report.reasons.empty() && blitz::Settings().frame_mode.GetLayer() == rex::SettingLayer::kDefault;
+    if (report.reasons.empty() || (!blitz::Settings().spec_warning.Get() && !test && !ask_frame_rate)) {
+      return true;
+    }
     if (const char* shown = std::getenv("REX_BLITZ_SPEC_SHOWN"); shown && *shown) return true;
 #ifdef _WIN32
     SetEnvironmentVariableW(L"REX_BLITZ_SPEC_SHOWN", L"1");
@@ -171,7 +177,7 @@ class BlitzApp : public rex::app::TitleApp {
     setenv("REX_BLITZ_SPEC_SHOWN", "1", 1);
 #endif
     std::atomic<blitz::SpecChoice> choice{blitz::SpecChoice::kPending};
-    auto dialog = blitz::MakeSpecWarning(choice, std::move(report));
+    auto dialog = blitz::MakeSpecWarning(choice, std::move(report), ask_frame_rate);
     {
       auto guard = GetUI().AddDialog(*dialog);
       dialog->OnShow();

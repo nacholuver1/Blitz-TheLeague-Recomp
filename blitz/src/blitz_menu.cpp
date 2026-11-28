@@ -72,6 +72,7 @@ enum Row {
   kUpdates,
   kDisplayMode,
   kRenderRes,
+  kFrameRate,
   kAntiAlias,
   kUpscaling,
   kFiltering,
@@ -88,11 +89,11 @@ enum Row {
 };
 
 const std::vector<Row> kLauncherRows = {
-    kStartGame, kUpdates, kDisplayMode, kRenderRes,  kAntiAlias,  kUpscaling, kFiltering,
+    kStartGame, kUpdates, kDisplayMode, kRenderRes,  kFrameRate, kAntiAlias,  kUpscaling, kFiltering,
     kAspect,    kScreenShape, kVolume,  kMuteUnfocused, kAudioBuffer, kFpsCounter,
     kSmartWait, kLauncherAtStart, kQuit};
 const std::vector<Row> kInGameRows = {
-    kDisplayMode, kRenderRes,  kAntiAlias,   kUpscaling, kFiltering,
+    kDisplayMode, kRenderRes,  kFrameRate,  kAntiAlias,   kUpscaling, kFiltering,
     kAspect,      kScreenShape, kVolume,     kMuteUnfocused, kAudioBuffer,  kFpsCounter,
     kSmartWait, kLauncherAtStart, kCloseMenu, kQuit};
 
@@ -170,6 +171,7 @@ const char* Label(Row row) {
     case kUpdates: return "Updates";
     case kDisplayMode: return "Display mode";
     case kRenderRes: return "Render resolution";
+    case kFrameRate: return "Frame rate";
     case kAntiAlias: return "Anti-aliasing";
     case kUpscaling: return "Upscaling";
     case kScreenShape: return "Screen shape";
@@ -207,6 +209,7 @@ const char* Note(Row row) {
     case kStartGame: return "Start Blitz: The League with these settings.";
     case kDisplayMode: return "Borderless fullscreen or a window.";
     case kRenderRes: return "Below 60 fps the game is in slow motion: pick the highest that holds 60.";
+    case kFrameRate: return "30: full game speed on PCs that can't hold 60 (two game steps per frame).";
     case kAntiAlias: return "FXAA smooths jagged edges.";
     case kUpscaling: return "Sharper scaling to your screen. FSR shines at 1x on a big screen.";
     case kScreenShape: return "Ultrawide widens the 3D view; the HUD is stretched to fit.";
@@ -243,6 +246,7 @@ std::string Value(Row row) {
     case kRenderRes:
       return std::string(kRenderLabels[ScaleIndex()]) +
              (ScaleIndex() + 1 > kMenuMaxScale ? " (custom)" : "");
+    case kFrameRate: return GetText("blitz.frame_mode") == "30" ? "30 fps" : "60 fps (original)";
     case kAntiAlias: return kAALabels[AAIndex()];
     case kUpscaling: return kUpscaleLabels[UpscaleIndex()];
     case kScreenShape: return kShapeLabels[ShapeIndex()];
@@ -514,6 +518,7 @@ class BlitzMenu final : public rex::ui::IDialog {
         SetInt("gpu.resolution_scale_y", s);
         break;
       }
+      case kFrameRate: Set("blitz.frame_mode", GetText("blitz.frame_mode") == "30" ? "60" : "30"); break;
       case kAntiAlias:
         Set("gpu.xenos.swap_post_effect", kAAValues[Wrap(AAIndex(), dir, kAACount)]);
         break;

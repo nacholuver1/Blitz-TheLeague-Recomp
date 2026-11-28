@@ -31,8 +31,10 @@ SpecReport CheckSpecs();
 enum class SpecChoice : int { kPending = 0, kPlay = 1, kQuit = 2 };
 
 // Warning screen: Play anyway / Don't show again (saves blitz.spec_warning =
-// false, then plays) / Quit.
+// false, then plays) / Quit. With ask_frame_rate (first start, blitz.frame_mode
+// never set): Play at 30 fps (recommended) / Play at 60 fps / Quit; either play
+// choice saves blitz.frame_mode and turns the warning off.
 std::unique_ptr<rex::ui::IDialog> MakeSpecWarning(std::atomic<SpecChoice>& choice,
-                                                  SpecReport report);
+                                                  SpecReport report, bool ask_frame_rate);
 
 }  // namespace blitz

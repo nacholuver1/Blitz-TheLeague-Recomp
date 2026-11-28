@@ -159,10 +159,10 @@ std::string Fmt(const char* f, double v) {
 
 // ------------------------------------------------------------------ dialog
 enum Row { kPlay, kNeverAgain, kQuit, kRowCount };
-const char* RowLabel(int row) {
+const char* RowLabel(int row, bool ask_frame_rate) {
   switch (row) {
-    case kPlay: return "Play anyway";
-    case kNeverAgain: return "Play, and don't show this again";
+    case kPlay: return ask_frame_rate ? "Play at 30 fps (recommended for this PC)" : "Play anyway";
+    case kNeverAgain: return ask_frame_rate ? "Play at 60 fps" : "Play, and don't show this again";
     default: return "Quit";
   }
 }
@@ -175,11 +175,15 @@ constexpr const char* kAdvice =
     "Full speed needs a dedicated graphics card (GTX 1060 / RX 580 or newer), 8 GB of RAM and a "
     "6-thread CPU. If you play anyway: keep Render resolution at 1x and close overlay and "
     "recording apps.";
+constexpr const char* kFrameRateAdvice =
+    "The game's speed is tied to its frame rate: below 60 fps it plays in slow motion. 30 fps "
+    "keeps full game speed by drawing every other frame. You can change it later under Frame "
+    "rate in the launcher or the F1 menu.";
 
 class SpecDialog final : public rex::ui::IDialog {
  public:
-  SpecDialog(std::atomic<SpecChoice>& choice, SpecReport report)
-      : choice_(choice), report_(std::move(report)) {}
+  SpecDialog(std::atomic<SpecChoice>& choice, SpecReport report, bool ask_frame_rate)
+      : choice_(choice), report_(std::move(report)), ask_frame_rate_(ask_frame_rate) {}
 
   bool NeedsContinuousPaint() const override { return true; }
   bool WantsExclusiveInput() const override { return true; }
@@ -217,7 +221,8 @@ class SpecDialog final : public rex::ui::IDialog {
       return p.font->CalcTextSizeA(p.size * 0.8f, FLT_MAX, tw, s).y;
     };
     const float ph = lh * 2.6f + wrapped_h(kIntro) + lh * (report_.reasons.size() + 0.8f) +
-                     wrapped_h(kAdvice) + lh * (static_cast<float>(kRowCount) + 2.6f);
+                     wrapped_h(kAdvice) + lh * (static_cast<float>(kRowCount) + 2.6f) +
+                     (ask_frame_rate_ ? wrapped_h(kFrameRateAdvice) + lh * 0.3f : 0.0f);
     const float px = (io.DisplaySize.x - pw) / 2, py = std::max(8 * scale, (io.DisplaySize.y - ph) / 2);
 
     p.Rect(0, 0, io.DisplaySize.x, io.DisplaySize.y, kBackdrop);
@@ -233,6 +238,9 @@ class SpecDialog final : public rex::ui::IDialog {
     }
     y += lh * 0.3f;
     y += p.Wrapped(px + tx, y, tw, kAdvice, kGrey, 0.8f) + lh * 0.6f;
+    if (ask_frame_rate_) {
+      y += p.Wrapped(px + tx, y, tw, kFrameRateAdvice, kWhite, 0.8f) + lh * 0.6f;
+    }
 
     int activate = -1;
     for (int i = 0; i < kRowCount; i++) {
@@ -243,13 +251,31 @@ class SpecDialog final : public rex::ui::IDialog {
       }
       if (RowClicked(rx, ry, rw, lh, ImGuiMouseButton_Left)) activate = i;
       if (i == sel_) p.Rect(rx, ry, rw, lh, kHighlight);
-      p.Text(px + tx, y, RowLabel(i), i == sel_ ? kWhite : (i == kPlay ? kAccent : kGrey));
+      p.Text(px + tx, y, RowLabel(i, ask_frame_rate_), i == sel_ ? kWhite : (i == kPlay ? kAccent : kGrey));
       y += lh;
     }
     if (accept) activate = sel_;
     p.Text(px + tx, y + lh * 0.4f, "Up/Down select, Enter/A choose. Mouse works too.", kGrey, 0.75f);
     ImGui::End();
 
+    if (ask_frame_rate_ && (activate == kPlay || activate == kNeverAgain)) {
+      // The frame-rate question is asked once: the answer is saved, and the
+      // warning is not shown again (the launcher's Frame rate row changes it).
+      auto& reg = rex::GetSettingsRegistry();
+      const char* mode = activate == kPlay ? "30" : "60";
+      if (auto r = reg.SetText("blitz.frame_mode", mode); !r) {
+        REXLOG_WARN("blitz: could not set the frame rate");
+      }
+      if (auto r = reg.SetText("blitz.spec_warning", "false"); !r) {
+        REXLOG_WARN("blitz: could not turn off the hardware warning");
+      }
+      if (auto s = reg.Save(REX_PATHS().config_file.Get()); !s) {
+        REXLOG_WARN("blitz: could not save settings");
+      }
+      REXLOG_INFO("blitz: hardware check: player chose {} fps", mode);
+      choice_.store(SpecChoice::kPlay);
+      return false;
+    }
     switch (activate) {
       case kNeverAgain: {
         auto& reg = rex::GetSettingsRegistry();
@@ -273,6 +299,7 @@ class SpecDialog final : public rex::ui::IDialog {
  private:
   std::atomic<SpecChoice>& choice_;
   SpecReport report_;
+  bool ask_frame_rate_ = false;
   int sel_ = 0;
   bool wait_release_ = true;
   Repeater up_, down_, accept_;
@@ -324,8 +351,9 @@ SpecReport CheckSpecs() {
   return r;
 }
 
-std::unique_ptr<rex::ui::IDialog> MakeSpecWarning(std::atomic<SpecChoice>& choice, SpecReport report) {
-  return std::make_unique<SpecDialog>(choice, std::move(report));
+std::unique_ptr<rex::ui::IDialog> MakeSpecWarning(std::atomic<SpecChoice>& choice, SpecReport report,
+                                                  bool ask_frame_rate) {
+  return std::make_unique<SpecDialog>(choice, std::move(report), ask_frame_rate);
 }
 
 }  // namespace blitz

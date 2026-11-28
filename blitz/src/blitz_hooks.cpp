@@ -4,9 +4,15 @@
 
 #include <rex/ppc/hook.h>
 
+#include <algorithm>
+#include <atomic>
 #include <bit>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
+#include <mutex>
+#include <thread>
+#include <unordered_map>
 
 #if defined(_WIN32)
 #ifndef NOMINMAX
@@ -23,6 +29,8 @@
 #include <immintrin.h>
 
 #include "blitz_settings.h"
+
+#include <rex/logging/log_category.h>
 
 // ---------------------------------------------------------------------------
 // Recursive-lock wrapper race fix (boot hang in the resource loader).
@@ -217,4 +225,329 @@ REX_HOOK_RAW(sub_82457430) {
   if (ctx.r3.u32 == 1 && blitz::Settings().smart_wait.Get()) {
     BackOff();
   }
+}
+
+// ---------------------------------------------------------------------------
+// Audio barrier (sound stopping for good). sub_82469588 is a rendezvous in the
+// game's audio library: each audio thread sets its byte (index = its processor
+// number, PCR byte 268) in a shared 64-bit word, then spins until the word is
+// either all expected bytes (it then clears it) or zero (another thread cleared
+// it). On the Xbox each thread owns a hardware thread and is never paused. On a
+// PC, a thread paused after the word filled up can miss both states: the
+// clearing thread clears, comes round again and sets its byte for the next
+// round, and the paused thread then sees neither "full" nor "zero" while the
+// other waits for its byte - both spin forever (stacks 2026-11-27: two audio
+// threads in this loop, starve snapshot "a guest audio callback is blocked").
+// The host version keeps the barrier on the host: a mutex-guarded mask of the
+// threads that arrived and a round counter. The last arrival clears the mask,
+// ends the round and clears the game's word; the others wait for the round to
+// change, so a paused thread always gets out of the round it was in. The game's
+// word still gets each thread's byte and the final zero.
+// ---------------------------------------------------------------------------
+namespace {
+struct AudioBarrier {
+  std::mutex mutex;
+  u64 arrived = 0;              // bytes in REX_LOAD_U64 order, guarded by mutex
+  std::atomic<u32> round{0};
+};
+
+AudioBarrier& FindAudioBarrier(u32 word) {
+  static std::mutex mutex;
+  static std::unordered_map<u32, AudioBarrier> barriers;  // nodes never move
+  std::lock_guard lock(mutex);
+  return barriers[word];
+}
+}  // namespace
+
+REX_HOOK_RAW(sub_82469588) {
+  if (!blitz::Settings().audio_barrier_fix.Get()) {
+    __imp__sub_82469588(ctx, base);
+    return;
+  }
+  const u32 object = ctx.r3.u32;
+  const u32 word = ctx.r4.u32;
+  if (REX_LOAD_U32(object + 304) == 0) {
+    return;
+  }
+  // One byte per hardware thread (byte k = slot at object + 308 + 4k); byte 0
+  // is the top byte of the value REX_LOAD_U64 returns.
+  u64 expected = 0;
+  for (u32 k = 0; k < 6; ++k) {
+    if (REX_LOAD_U32(object + 308 + 4 * k) != 0) {
+      expected |= u64{1} << (56 - 8 * k);
+    }
+  }
+  const u8 processor = REX_LOAD_U8(ctx.r13.u32 + 268);
+  if (processor >= 8) {
+    // Outside the 8-byte word: never seen; leave it to the game's own code.
+    __imp__sub_82469588(ctx, base);
+    return;
+  }
+  AudioBarrier& barrier = FindAudioBarrier(word);
+  u32 my_round;
+  {
+    std::lock_guard lock(barrier.mutex);
+    REX_STORE_U8(word + processor, 1);
+    barrier.arrived |= u64{1} << (56 - 8 * processor);
+    if ((barrier.arrived & expected) == expected) {
+      barrier.arrived = 0;
+      REX_STORE_U64(word, 0);
+      barrier.round.fetch_add(1, std::memory_order_release);
+      return;
+    }
+    my_round = barrier.round.load(std::memory_order_relaxed);
+  }
+  for (u32 spins = 0; barrier.round.load(std::memory_order_acquire) == my_round; ++spins) {
+    if (spins < 2000) {
+      _mm_pause();
+    } else {
+      std::this_thread::yield();
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Frame rate: 60 (the game's own) or 30 mode (blitz.frame_mode).
+//
+// The game's speed is one fixed game step per main-loop pass, and each pass
+// also runs the frame task sub_822DF528, which renders and presents (the
+// present waits for the 60 Hz vblank). Below 60 fps the game runs in slow
+// motion. The frame task has the console's own frame skip, but a graphics
+// flag ([[[0x82873160]+8]+12], 1 from boot) bypasses it, and even forced on it
+// only reaches 3 game steps per 2 presents (its 2-frame window counts the
+// skipped, nearly free frame; logs 2026-11-27).
+//
+// 30 mode: the frame task renders on every other pass and skips the render on
+// the passes between, so each drawn frame carries two game steps. A skipped
+// pass waits until two guest vblanks have passed since the last one, so a
+// fast GPU still runs 60 steps a second and not 120. Loading screens (game
+// mode 17/18), the frame task's second early check and scenes the game itself
+// locks to 30 fps keep the game's own path, which renders every pass, as the
+// game does there. The cutscenes (players running on, cheerleaders, coaches,
+// celebrations) present with a swap interval of 2: the graphics library's swap
+// callback gets the interval with each swap, and 30 mode reads the last one,
+// or those scenes would get a second game step and run at double speed.
+//
+// blitz.frame_diag (off, not saved): once a second, log frame-task passes,
+// renders skipped, game steps (sub_822E1530), presents (sub_82462A78), the
+// game mode and the early-check state.
+// ---------------------------------------------------------------------------
+namespace {
+constexpr u32 kGameMode = 0x828007C4;
+
+struct VblankClock {
+  std::atomic<u64> count{0};
+  std::mutex mutex;
+  std::condition_variable cv;
+};
+VblankClock g_vblank;
+
+struct FramePacer {  // main thread only
+  bool active = false;      // in 30-mode pairs (false: 60 mode or the game's own path)
+  bool render_next = true;
+  u64 mark = 0;             // vblank count the next skipped pass waits two vblanks from
+};
+FramePacer g_pacer;
+
+// Set while 30 mode draws a frame that carries two game steps (see the frame
+// timer hook below).
+bool g_pair_render = false;
+
+// The scene update ran during this pass's game step (set by its hook, read and
+// cleared by the frame task; same thread, the step runs first). In the game's
+// loading modes 17/18, 30 mode leaves the frame task to the game until the
+// scene update has run two passes in a row (the kickoff run-on starts while the
+// mode still says loading), then keeps 30 mode until the mode changes.
+bool g_scene_this_pass = false;
+int g_scene_passes = 0;
+bool g_loading_scene = false;
+
+// The game's last present interval in vblanks (1 = 60 fps, 2 = locked 30).
+std::atomic<u32> g_present_interval{0};  // 0 until the first swap
+
+// A skipped pass: wait until two vblanks have passed since the last one.
+void WaitForVblankCount(u64 target) {
+  if (g_vblank.count.load() < target) {
+    std::unique_lock lock(g_vblank.mutex);
+    // Bounded: vblanks always run, but never hang the game if they stop.
+    g_vblank.cv.wait_for(lock, std::chrono::milliseconds(50),
+                         [&] { return g_vblank.count.load() >= target; });
+  }
+}
+
+void WaitSecondVblank() {
+  WaitForVblankCount(g_pacer.mark + 2);
+  // A late pass starts a new grid here; missed vblanks are not made up.
+  g_pacer.mark = g_vblank.count.load();
+}
+
+bool EarlyCheckB(u8* base) {
+  if (u32 p = REX_LOAD_U32(0x82873184)) {
+    if (u32 q = REX_LOAD_U32(p + 192)) return REX_LOAD_U8(q + 330) != 0;
+  }
+  return false;
+}
+
+bool EarlyCheckA(u8* base) {
+  if (u32 a = REX_LOAD_U32(0x82873160)) {
+    if (u32 b = REX_LOAD_U32(a + 8)) return REX_LOAD_U32(b + 12) != 0;
+  }
+  return false;
+}
+
+struct FrameDiag {
+  std::atomic<u32> frames{0}, early_a{0}, early_b{0}, locked30{0}, skipped{0}, renders{0}, steps{0},
+      presents{0}, scene_updates{0}, halved{0};
+  std::chrono::steady_clock::time_point last{};
+  bool started = false;
+};
+FrameDiag g_frame_diag;
+
+void FrameDiagTick(u8* base) {
+  auto& d = g_frame_diag;
+  const auto now = std::chrono::steady_clock::now();
+  if (!d.started) {
+    d.started = true;
+    d.last = now;
+    return;
+  }
+  if (now - d.last < std::chrono::seconds(1)) return;
+  const double secs = std::chrono::duration<double>(now - d.last).count();
+  REXLOG_INFO(
+      "frame diag: {:.2f}s mode{} frames {} skipped {} renders {} steps {} presents {} | early a {} "
+      "b {} | game mode {} vblanks {} | interval {} locked30 passes {} | scene updates {} halved {}",
+      secs, blitz::FrameMode30() ? 30 : 60, d.frames.exchange(0), d.skipped.exchange(0),
+      d.renders.exchange(0), d.steps.exchange(0), d.presents.exchange(0), d.early_a.exchange(0),
+      d.early_b.exchange(0), u32{REX_LOAD_U32(kGameMode)}, g_vblank.count.load(),
+      g_present_interval.load(), d.locked30.exchange(0), d.scene_updates.exchange(0),
+      d.halved.exchange(0));
+  d.last = now;
+}
+}  // namespace
+
+// ---------------------------------------------------------------------------
+// Scene time step in 30 mode. The game's frame timer (sub_823AA520, timer object
+// [0x82873150]) runs once per drawn frame from the render path: it stores the
+// seconds since its previous call as a double at +200, plus the frame rate and
+// a 64-frame frame-rate ring. The in-engine scenes (players running on, huddles,
+// cheerleaders, coaches, celebrations) read that time step on every game step
+// (sub_8233FDD0, inside the step task). In 30 mode a drawn frame carries two game
+// steps, so both read the whole frame's time and the scenes ran at double speed
+// (eye tests and an in-game memory scan, 2026-11-28). When 30 mode draws such a
+// frame, the time step is halved after the timer runs, so the two steps together
+// add up to real time. It stays halved until the next drawn frame's timer call
+// overwrites it; the frame rate and the ring (read by the render side) are left
+// as measured.
+// ---------------------------------------------------------------------------
+constexpr u32 kFrameTimerPtr = 0x82873150;
+
+REX_HOOK_RAW(sub_823AA520) {
+  const u32 timer = ctx.r3.u32;
+  __imp__sub_823AA520(ctx, base);
+  if (g_pair_render && timer != 0 && timer == REX_LOAD_U32(kFrameTimerPtr)) {
+    const f64 step = std::bit_cast<f64>(u64{REX_LOAD_U64(timer + 200)});
+    REX_STORE_U64(timer + 200, std::bit_cast<u64>(step * 0.5));
+    if (blitz::Settings().frame_diag.Get()) g_frame_diag.halved++;
+  }
+}
+
+// The scene update that reads the frame time step.
+REX_HOOK_RAW(sub_8233FDD0) {
+  g_scene_this_pass = true;
+  if (blitz::Settings().frame_diag.Get()) g_frame_diag.scene_updates++;
+  __imp__sub_8233FDD0(ctx, base);
+}
+
+// The graphics library's swap callback: the present interval of each swap is in
+// the argument's top 16 bits.
+REX_HOOK_RAW(sub_82462860) {
+  g_present_interval.store(ctx.r3.u32 >> 16, std::memory_order_relaxed);
+  __imp__sub_82462860(ctx, base);
+}
+
+// The game's graphics interrupt callback (registered with
+// VdSetGraphicsInterruptCallback): r3 = source, 0 = vblank.
+REX_HOOK_RAW(sub_82448EE8) {
+  if (ctx.r3.u32 == 0) {
+    {
+      std::lock_guard lock(g_vblank.mutex);
+      g_vblank.count.fetch_add(1);
+    }
+    g_vblank.cv.notify_all();
+  }
+  __imp__sub_82448EE8(ctx, base);
+}
+
+REX_HOOK_RAW(sub_822DF528) {
+  const bool mode30 = blitz::FrameMode30();
+  const bool diag = blitz::Settings().frame_diag.Get();
+  if (!mode30 && !diag) {
+    g_pacer.active = false;
+    g_scene_this_pass = false;
+    g_scene_passes = 0;
+    g_loading_scene = false;
+    __imp__sub_822DF528(ctx, base);
+    return;
+  }
+  auto& d = g_frame_diag;
+  const u32 renders_before = d.renders.load();
+  if (diag) {
+    if (EarlyCheckA(base)) d.early_a++;
+    if (EarlyCheckB(base)) d.early_b++;
+  }
+  const u32 mode = REX_LOAD_U32(kGameMode);
+  const bool scene_ran = g_scene_this_pass;
+  g_scene_this_pass = false;
+  if (mode == 17 || mode == 18) {
+    g_scene_passes = scene_ran ? std::min(g_scene_passes + 1, 2) : 0;
+    if (g_scene_passes >= 2) g_loading_scene = true;
+  } else {
+    g_scene_passes = 0;
+    g_loading_scene = false;
+  }
+  const bool loading = (mode == 17 || mode == 18) && !g_loading_scene;
+  const bool game_locked30 = g_present_interval.load(std::memory_order_relaxed) >= 2;
+  if (diag && game_locked30) d.locked30++;
+  if (!mode30) {
+    g_pacer.active = false;
+    __imp__sub_822DF528(ctx, base);
+  } else if (loading || game_locked30 || EarlyCheckB(base)) {
+    // The game's own path (renders every pass here); pairs start again after.
+    __imp__sub_822DF528(ctx, base);
+    g_pacer.active = false;
+  } else if (!g_pacer.active || g_pacer.render_next) {
+    // Entering 30 mode (start, a switch from 60, after a loading screen): anchor the
+    // pacing at this render, so the first skipped pass also waits two vblanks.
+    if (!g_pacer.active) {
+      g_pacer.active = true;
+      g_pacer.mark = g_vblank.count.load();
+    }
+    g_pair_render = true;
+    sub_822DF2F0(ctx, base);  // the frame task's render call
+    g_pair_render = false;
+    g_pacer.render_next = false;
+  } else {
+    WaitSecondVblank();
+    g_pacer.render_next = true;
+  }
+  if (diag) {
+    d.frames++;
+    if (d.renders.load() == renders_before) d.skipped++;
+    FrameDiagTick(base);
+  }
+}
+
+REX_HOOK_RAW(sub_822DF2F0) {
+  if (blitz::Settings().frame_diag.Get()) g_frame_diag.renders++;
+  __imp__sub_822DF2F0(ctx, base);
+}
+
+REX_HOOK_RAW(sub_822E1530) {
+  if (blitz::Settings().frame_diag.Get()) g_frame_diag.steps++;
+  __imp__sub_822E1530(ctx, base);
+}
+
+REX_HOOK_RAW(sub_82462A78) {
+  if (blitz::Settings().frame_diag.Get()) g_frame_diag.presents++;
+  __imp__sub_82462A78(ctx, base);
 }
