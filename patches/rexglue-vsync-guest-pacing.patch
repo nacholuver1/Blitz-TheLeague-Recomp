@@ -1,0 +1,155 @@
+diff --git a/include/rex/gpu/graphics_system.h b/include/rex/gpu/graphics_system.h
+index 3fb2a45..1190b78 100644
+--- a/include/rex/gpu/graphics_system.h
++++ b/include/rex/gpu/graphics_system.h
+@@ -37,6 +37,10 @@ class REX_GPU_API GraphicsSettings final : public SettingOwner {
+       "elsewhere",
+       kStartupOnly);
+   REX_SETTING(bool, vsync, true, "Wait for vertical blank when presenting");
++  REX_SETTING(bool, vsync_paces_guest, true,
++              "With vsync off, also run the guest's vblank interrupt at 1000 Hz instead of the "
++              "display refresh; false keeps guest vblanks at the refresh rate, so vsync only "
++              "changes how frames are shown (for titles whose speed is tied to vblanks)");
+   REX_SETTING(f64, frame_limit, 0.0, "Most presents per second, 0 for no limit",
+               Range{0.0, 1000.0});
+   REX_SETTING(i32, resolution_scale_x, 1, "Draw resolution scale X", Range{1, 8}, kRestart);
+diff --git a/src/gpu/xenos/command_processor.cpp b/src/gpu/xenos/command_processor.cpp
+index 5e58c53..8bb83d6 100644
+--- a/src/gpu/xenos/command_processor.cpp
++++ b/src/gpu/xenos/command_processor.cpp
+@@ -1008,7 +1008,7 @@ bool CommandProcessor::ExecutePacketType3_WAIT_REG_MEM(memory::RingBuffer* reade
+     if (!matched) {
+       if (wait >= 0x100) {
+         PrepareForWait();
+-        if (!graphics_system_->IsVSyncEnabled()) {
++        if (!graphics_system_->IsGuestVblankPaced()) {
+           back_off();
+         } else {
+           rex::platform::SleepFor(std::chrono::milliseconds(wait / 0x100));
+diff --git a/src/gpu/xenos/xenos_graphics_driver_base.cpp b/src/gpu/xenos/xenos_graphics_driver_base.cpp
+index 6fe403e..dcb5ac7 100644
+--- a/src/gpu/xenos/xenos_graphics_driver_base.cpp
++++ b/src/gpu/xenos/xenos_graphics_driver_base.cpp
+@@ -117,6 +117,11 @@ bool XenosGraphicsDriverBase::IsVSyncEnabled() const {
+   return graphics_settings_ != nullptr ? graphics_settings_->vsync.Get() : true;
+ }
+ 
++bool XenosGraphicsDriverBase::IsGuestVblankPaced() const {
++  return graphics_settings_ == nullptr || graphics_settings_->vsync.Get() ||
++         !graphics_settings_->vsync_paces_guest.Get();
++}
++
+ u32 XenosGraphicsDriverBase::GetResolutionScaleX() const {
+   return static_cast<u32>(std::max<i32>(
+       1, graphics_settings_ != nullptr ? graphics_settings_->resolution_scale_x.Get() : 1));
+@@ -165,7 +170,7 @@ Result<void> XenosGraphicsDriverBase::AttachTitle(const TitleInfo& info, IPhysic
+     constexpr std::chrono::milliseconds kLongestSleep{50};
+     u64 last_frame_time = Clock::QueryGuestTickCount();
+     while (vsync_worker_running_) {
+-      u64 interval_ticks = IsVSyncEnabled() ? vsync_interval_ticks : no_vsync_interval_ticks;
++      u64 interval_ticks = IsGuestVblankPaced() ? vsync_interval_ticks : no_vsync_interval_ticks;
+       DeliverVblanks(
+           Clock::QueryGuestTickCount(), last_frame_time, interval_ticks, kMaxVblankCatchUp,
+           [this] { MarkVblank(); }, [this] { return vsync_worker_running_.load(); });
+diff --git a/src/gpu/xenos/xenos_graphics_driver_base.h b/src/gpu/xenos/xenos_graphics_driver_base.h
+index 4892b3e..dbf9905 100644
+--- a/src/gpu/xenos/xenos_graphics_driver_base.h
++++ b/src/gpu/xenos/xenos_graphics_driver_base.h
+@@ -112,6 +112,14 @@ class REX_GPU_XENOS_API XenosGraphicsDriverBase : public IXenosGraphicsDriver,
+    */
+   bool IsVSyncEnabled() const;
+ 
++  /**
++   * Reads gpu.vsync and gpu.vsync_paces_guest.
++   *
++   * @return True when guest vblanks and GPU waits follow the display refresh: vsync is on, or
++   * the title keeps guest pacing with vsync off.
++   */
++  bool IsGuestVblankPaced() const;
++
+   /**
+    * Reads gpu.resolution_scale_x.
+    *
+diff --git a/tests/unit/gpu/present_policy_test.cpp b/tests/unit/gpu/present_policy_test.cpp
+index 054c895..8c2ec28 100644
+--- a/tests/unit/gpu/present_policy_test.cpp
++++ b/tests/unit/gpu/present_policy_test.cpp
+@@ -42,6 +42,14 @@ REX_TEST_CASE("Vsync picks FIFO whatever other modes are allowed", "[gpu][presen
+   CHECK(ChooseVulkanPresentMode(true, {false, false, false}) == VulkanPresentMode::kFifo);
+ }
+ 
++REX_TEST_CASE("Relaxed vsync prefers relaxed FIFO, then mailbox, then FIFO", "[gpu][present]") {
++  CHECK(ChooseVulkanPresentMode(true, {true, true, true}, true) ==
++        VulkanPresentMode::kFifoRelaxed);
++  // Wayland compositors commonly offer FIFO and mailbox only
++  CHECK(ChooseVulkanPresentMode(true, {false, true, false}, true) == VulkanPresentMode::kMailbox);
++  CHECK(ChooseVulkanPresentMode(true, {true, false, false}, true) == VulkanPresentMode::kFifo);
++}
++
+ REX_TEST_CASE("No vsync picks the first allowed of immediate, mailbox and relaxed FIFO",
+               "[gpu][present]") {
+   CHECK(ChooseVulkanPresentMode(false, {true, true, true}) == VulkanPresentMode::kImmediate);
+diff --git a/src/gpu/xenos/host/present_policy.h b/src/gpu/xenos/host/present_policy.h
+index ef7c60c..eb0a540 100644
+--- a/src/gpu/xenos/host/present_policy.h
++++ b/src/gpu/xenos/host/present_policy.h
+@@ -61,16 +61,23 @@ struct VulkanPresentModeSupport {
+ };
+ 
+ /**
+- * @param relaxed_vsync With vsync, prefer relaxed FIFO (adaptive vsync) when it is allowed.
+- * @return FIFO for vsync (relaxed FIFO with relaxed_vsync when allowed), otherwise the first
+- * allowed of immediate, mailbox and relaxed FIFO, and FIFO when none is allowed.
++ * @param relaxed_vsync With vsync, prefer relaxed FIFO (adaptive vsync) when it is allowed, else
++ * mailbox (many Wayland compositors offer no relaxed FIFO): either way a late frame doesn't wait a
++ * whole extra refresh.
++ * @return FIFO for vsync (relaxed FIFO or mailbox with relaxed_vsync when allowed), otherwise the
++ * first allowed of immediate, mailbox and relaxed FIFO, and FIFO when none is allowed.
+  */
+ constexpr VulkanPresentMode ChooseVulkanPresentMode(bool vsync,
+                                                     const VulkanPresentModeSupport& support,
+                                                     bool relaxed_vsync = false) {
+   if (vsync) {
+-    return relaxed_vsync && support.fifo_relaxed ? VulkanPresentMode::kFifoRelaxed
+-                                                 : VulkanPresentMode::kFifo;
++    if (relaxed_vsync && support.fifo_relaxed) {
++      return VulkanPresentMode::kFifoRelaxed;
++    }
++    if (relaxed_vsync && support.mailbox) {
++      return VulkanPresentMode::kMailbox;
++    }
++    return VulkanPresentMode::kFifo;
+   }
+   if (support.immediate) {
+     return VulkanPresentMode::kImmediate;
+diff --git a/src/gpu/xenos/host/vulkan/vulkan_presenter.cpp b/src/gpu/xenos/host/vulkan/vulkan_presenter.cpp
+index 66c869d..d5d960c 100644
+--- a/src/gpu/xenos/host/vulkan/vulkan_presenter.cpp
++++ b/src/gpu/xenos/host/vulkan/vulkan_presenter.cpp
+@@ -852,8 +852,11 @@ VkSwapchainKHR VulkanPresenter::PaintContext::CreateSwapchainForVulkanSurface(
+   present_queue_family_out = queue_family_index_present;
+   image_format_out = swapchain_create_info.imageFormat;
+   image_extent_out = swapchain_create_info.imageExtent;
++  // Mailbox chosen for vsync (the relaxed vsync fallback) counts as vsync too: painting then stays
++  // on the UI thread, as with FIFO. Painting on the guest output thread slowed heavy scenes.
+   is_fifo_out = swapchain_create_info.presentMode == VK_PRESENT_MODE_FIFO_KHR ||
+-                swapchain_create_info.presentMode == VK_PRESENT_MODE_FIFO_RELAXED_KHR;
++                swapchain_create_info.presentMode == VK_PRESENT_MODE_FIFO_RELAXED_KHR ||
++                (vsync && swapchain_create_info.presentMode == VK_PRESENT_MODE_MAILBOX_KHR);
+   return swapchain;
+ }
+ 
+diff --git a/src/gpu/xenos/host/vulkan/vulkan_presenter.h b/src/gpu/xenos/host/vulkan/vulkan_presenter.h
+index 1c22a5a..8c603d5 100644
+--- a/src/gpu/xenos/host/vulkan/vulkan_presenter.h
++++ b/src/gpu/xenos/host/vulkan/vulkan_presenter.h
+@@ -372,7 +372,8 @@ class VulkanPresenter final : public Presenter {
+      * @param present_queue_family_out Receives the presentation queue family.
+      * @param image_format_out Receives the swapchain image format.
+      * @param image_extent_out Receives the swapchain image extent.
+-     * @param is_fifo_out Receives whether the present mode is FIFO.
++     * @param is_fifo_out Receives whether presents follow vsync: FIFO, relaxed FIFO, or mailbox
++     * chosen for vsync.
+      * @param ui_surface_unusable_out Receives whether the surface is unusable for the UI.
+      * @return The swapchain, or null on failure.
+      */

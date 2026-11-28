@@ -1,0 +1,1349 @@
+diff --git a/src/gpu/xenos/command_processor.cpp b/src/gpu/xenos/command_processor.cpp
+index 8bb83d6..a492ae3 100644
+--- a/src/gpu/xenos/command_processor.cpp
++++ b/src/gpu/xenos/command_processor.cpp
+@@ -9,6 +9,7 @@
+  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
+  */
+ 
++#include <array>
+ #include <bit>
+ #include <algorithm>
+ #include <chrono>
+@@ -24,6 +25,7 @@
+ #include <rex/logging/log_category.h>
+ #include <rex/chrono.h>
+ #include "gpu/xenos/command_processor.h"
++#include "gpu/xenos/gpu_stats.h"
+ #include "gpu/xenos/xenos_graphics_driver_base.h"
+ #include "gpu/xenos/physical_memory.h"
+ #include <rex/xenos/texture.h>
+@@ -908,6 +910,128 @@ bool CommandProcessor::ExecutePacketType3_XE_SWAP(memory::RingBuffer* reader,
+ #endif
+   rex::platform::Profiler::EndFrame();
+ 
++  if (GetXenosSettings().stats_log.Get()) {
++    // Per-frame averages of rex::gpu::g_gpu_stats over the last 5 seconds.
++    static GpuStats* const stats = &g_gpu_stats;
++    static std::array<u64, 13> last{};
++    static u64 last_tick = 0;
++    static u64 frames = 0;
++    ++frames;
++    const u64 now = rex::Clock::GetHostTickCount();
++    const u64 freq = rex::Clock::GetHostTickFrequency();
++    if (!last_tick) {
++      last_tick = now;
++      frames = 0;
++    } else if (now - last_tick >= freq * 5) {
++      const std::array<u64, 13> cur = {
++          stats->draws.load(),         stats->resolves.load(),
++          stats->resolve_readbacks.load(), stats->rt_updates.load(),
++          stats->edram_transfers.load(), stats->resolve_clears.load(),
++          stats->render_passes.load(), stats->upload_ranges.load(),
++          stats->upload_bytes.load(),  stats->textures_loaded.load(),
++          stats->pipelines_created.load(), stats->submissions.load(),
++          stats->uploads_hoisted.load()};
++      const double f = static_cast<double>(frames);
++      auto per = [&](size_t i) { return static_cast<double>(cur[i] - last[i]) / f; };
++      REXGPU_INFO(
++          "gpu stats: {:.1f} fps | per frame: draws {:.0f}, resolves {:.1f} (readback {:.1f}), "
++          "rt changes {:.1f}, edram transfers {:.1f}, resolve clears {:.1f}, render passes "
++          "{:.1f}, uploads {:.1f} ({:.0f} KB, hoisted {:.1f}), textures loaded {:.1f}, "
++          "pipelines {:.2f}, submissions {:.1f}",
++          f * freq / static_cast<double>(now - last_tick), per(0), per(1), per(2), per(3), per(4),
++          per(5), per(6), per(7), per(8) / 1024.0, per(12), per(9), per(10), per(11));
++      last = cur;
++      last_tick = now;
++      frames = 0;
++    }
++  }
++
++  if (const i32 delay_ms = GetXenosSettings().debug_swap_delay_ms.Get(); delay_ms > 0) {
++    i32 jitter_us = 0;
++    if (const i32 jitter_ms = GetXenosSettings().debug_swap_delay_jitter_ms.Get(); jitter_ms > 0) {
++      static u32 rng = 0x9E3779B9u;  // xorshift32, command processor thread only
++      rng ^= rng << 13;
++      rng ^= rng >> 17;
++      rng ^= rng << 5;
++      const u32 span = static_cast<u32>(jitter_ms) * 2000 + 1;
++      jitter_us = static_cast<i32>(rng % span) - jitter_ms * 1000;
++    }
++    const i32 total_us = std::max(0, delay_ms * 1000 + jitter_us);
++    rex::platform::SleepFor(std::chrono::microseconds(total_us));
++  }
++  // late_frame_vblank: the next memory wait may be the title's post-swap vblank wait.
++  swap_armed_ = GetXenosSettings().late_frame_vblank.Get();
++  if (!swap_armed_) {
++    // Off: forget what was learned, so turning it on again starts fresh.
++    gate_candidate_ = 0;
++    gate_candidate_streak_ = 0;
++    vblank_gate_ = 0;
++  }
++
++  if (GetXenosSettings().pacing_log.Get()) {
++    // Swap intervals in buckets and WAIT_REG_MEM time, every 5 seconds.
++    static u64 last_swap = 0;
++    static u64 last_log = 0;
++    static std::array<u64, 5> buckets{};  // <17.5, <25, <35, <50, >=50 ms
++    static u64 swaps = 0;
++    static std::array<u64, 9> last{};
++    const u64 now = rex::Clock::GetHostTickCount();
++    const u64 freq = rex::Clock::GetHostTickFrequency();
++    const auto ms = [freq](u64 ticks) {
++      return static_cast<double>(ticks) * 1000.0 / static_cast<double>(freq);
++    };
++    if (last_swap) {
++      const double gap = ms(now - last_swap);
++      buckets[gap < 17.5 ? 0 : gap < 25 ? 1 : gap < 35 ? 2 : gap < 50 ? 3 : 4]++;
++      ++swaps;
++    }
++    last_swap = now;
++    if (!last_log) {
++      last_log = now;
++    } else if (now - last_log >= freq * 5) {
++      GpuStats& s = g_gpu_stats;
++      const std::array<u64, 9> cur = {
++          s.vblanks.load(),          s.vblank_late.load(),      s.wrm_waits.load(),
++          s.wrm_wait_ticks.load(),   s.wrm_vblank_waits.load(), s.wrm_vblank_ticks.load(),
++          s.vblank_holds.load(),     s.vblank_hold_ticks.load(), s.vblank_hold_timeouts.load()};
++      const u64 holds = cur[6] - last[6];
++      // Hold ticks are guest ticks.
++      const double hold_ms =
++          holds ? static_cast<double>(cur[7] - last[7]) * 1000.0 /
++                      static_cast<double>(rex::Clock::GetGuestTickFrequency()) /
++                      static_cast<double>(holds)
++                : 0.0;
++      const double secs = ms(now - last_log) / 1000.0;
++      const double max_gap = ms(s.vblank_max_gap.exchange(0));
++      REXGPU_INFO(
++          "pacing: {:.1f} swaps/s, intervals <17.5ms {} / 17.5-25 {} / 25-35 {} / 35-50 {} / "
++          ">=50 {} | vblanks {:.1f}/s, late {}, max gap {:.1f} ms | WAIT_REG_MEM {:.0f}/s, "
++          "{:.1f} ms/s waiting (memory polls {:.0f}/s, {:.1f} ms/s) | held vblanks {} (avg "
++          "{:.1f} ms, {} at the limit)",
++          static_cast<double>(swaps) / secs, buckets[0], buckets[1], buckets[2], buckets[3],
++          buckets[4], static_cast<double>(cur[0] - last[0]) / secs, cur[1] - last[1], max_gap,
++          static_cast<double>(cur[2] - last[2]) / secs, ms(cur[3] - last[3]) / secs,
++          static_cast<double>(cur[4] - last[4]) / secs, ms(cur[5] - last[5]) / secs, holds,
++          hold_ms, cur[8] - last[8]);
++      // The three wait sites with the most time.
++      std::vector<std::pair<u64, WaitSite>> sites(wait_sites_.begin(), wait_sites_.end());
++      std::sort(sites.begin(), sites.end(),
++                [](const auto& a, const auto& b) { return a.second.ticks > b.second.ticks; });
++      for (size_t i = 0; i < std::min<size_t>(3, sites.size()); ++i) {
++        const u64 key = sites[i].first;
++        REXGPU_INFO("pacing:   wait site {} 0x{:08X} fn {}: {:.0f}/s, {:.1f} ms/s, last ref 0x{:X}",
++                    (key & 8) ? "mem" : "reg", static_cast<u32>(key >> 4), key & 7,
++                    static_cast<double>(sites[i].second.count) / secs,
++                    ms(sites[i].second.ticks) / secs, sites[i].second.last_ref);
++      }
++      wait_sites_.clear();
++      buckets = {};
++      swaps = 0;
++      last = cur;
++      last_log = now;
++    }
++  }
++
+   u32 magic = reader->ReadAndSwap<memory::FourCCT>();
+   REX_ASSERT(magic == kSwapSignature);
+ 
+@@ -951,6 +1075,9 @@ bool CommandProcessor::ExecutePacketType3_WAIT_REG_MEM(memory::RingBuffer* reade
+ 
+   bool matched = false;
+   u32 attempts = 0;
++  const bool force_back_off = GetXenosSettings().wait_reg_mem_back_off.Get();
++  u64 wait_start_tick = 0;
++  bool first_check = true;
+   const auto back_off = [&attempts] {
+     constexpr u32 kYields = 16;
+     constexpr u32 kLongestSleepMicroseconds = 1000;
+@@ -1005,10 +1132,41 @@ bool CommandProcessor::ExecutePacketType3_WAIT_REG_MEM(memory::RingBuffer* reade
+         REX_UNHANDLED_CASE(wait_function);
+         break;
+     }
++    if (first_check) {
++      first_check = false;
++      if (is_memory && swap_armed_ && !matched) {
++        // The first memory wait after a swap that has to wait: learn the title's vblank wait,
++        // and once learned tell the vsync thread the frame has reached it (late_frame_vblank).
++        // Waits already satisfied at the first check are skipped: both Blitz games poll another
++        // flag at a nearby address first, and it never waits.
++        swap_armed_ = false;
++        const u64 site = (u64(poll_reg_addr) << 32) ^ (u64(wait_info & 0x7) << 29) ^ ref;
++        if (site == gate_candidate_) {
++          if (gate_candidate_streak_ < kVblankGateStreak) {
++            ++gate_candidate_streak_;
++          }
++        } else {
++          gate_candidate_ = site;
++          gate_candidate_streak_ = 1;
++        }
++        if (gate_candidate_streak_ >= kVblankGateStreak && vblank_gate_ != site) {
++          vblank_gate_ = site;
++          REXGPU_INFO("late frame vblank: vblank wait learned (memory 0x{:08X}, function {}, "
++                      "reference 0x{:X})",
++                      poll_reg_addr, wait_info & 0x7, ref);
++        }
++        if (site == vblank_gate_) {
++          graphics_system_->NotifyVblankGateEntered();
++        }
++      }
++    }
++    if (!matched && !wait_start_tick) {
++      wait_start_tick = rex::Clock::GetHostTickCount();
++    }
+     if (!matched) {
+       if (wait >= 0x100) {
+         PrepareForWait();
+-        if (!graphics_system_->IsGuestVblankPaced()) {
++        if (force_back_off || !graphics_system_->IsGuestVblankPaced()) {
+           back_off();
+         } else {
+           rex::platform::SleepFor(std::chrono::milliseconds(wait / 0x100));
+@@ -1028,6 +1186,24 @@ bool CommandProcessor::ExecutePacketType3_WAIT_REG_MEM(memory::RingBuffer* reade
+     }
+   } while (!matched);
+ 
++  if (wait_start_tick) {
++    const u64 ticks = rex::Clock::GetHostTickCount() - wait_start_tick;
++    g_gpu_stats.Add(g_gpu_stats.wrm_waits);
++    g_gpu_stats.Add(g_gpu_stats.wrm_wait_ticks, ticks);
++    if (is_memory) {
++      g_gpu_stats.Add(g_gpu_stats.wrm_vblank_waits);
++      g_gpu_stats.Add(g_gpu_stats.wrm_vblank_ticks, ticks);
++    }
++    if (GetXenosSettings().pacing_log.Get()) {
++      // Per wait site, on this thread only; logged and cleared with the pacing log.
++      auto& site = wait_sites_[(u64(poll_reg_addr) << 4) | (is_memory ? 8 : 0) |
++                               (wait_info & 0x7)];
++      site.count++;
++      site.ticks += ticks;
++      site.last_ref = ref;
++    }
++  }
++
+   return true;
+ }
+ 
+diff --git a/src/gpu/xenos/command_processor.h b/src/gpu/xenos/command_processor.h
+index 49e5819..5047753 100644
+--- a/src/gpu/xenos/command_processor.h
++++ b/src/gpu/xenos/command_processor.h
+@@ -385,6 +385,24 @@ class REX_GPU_XENOS_API CommandProcessor : public rex::NonCopyable {
+ 
+   u32 counter_ = 0;
+ 
++  // WAIT_REG_MEM wait sites for gpu.xenos.pacing_log, keyed by poll address, memory flag and
++  // wait function. Used on the command processor thread only.
++  struct WaitSite {
++    u64 count = 0;
++    u64 ticks = 0;
++    u32 last_ref = 0;
++  };
++  std::unordered_map<u64, WaitSite> wait_sites_;
++
++  // gpu.xenos.late_frame_vblank: the title's post-swap vblank wait, learned as the first memory
++  // WAIT_REG_MEM after a swap that has to wait, with the same address, function and reference for
++  // kVblankGateStreak swaps in a row. Command processor thread only.
++  static constexpr u32 kVblankGateStreak = 8;
++  bool swap_armed_ = false;
++  u64 gate_candidate_ = 0;
++  u32 gate_candidate_streak_ = 0;
++  u64 vblank_gate_ = 0;  // 0 until learned
++
+   u32 primary_buffer_ptr_ = 0;
+   u32 primary_buffer_size_ = 0;
+ 
+diff --git a/src/gpu/xenos/d3d12/command_processor.cpp b/src/gpu/xenos/d3d12/command_processor.cpp
+index 4dd76dd..5dd2282 100644
+--- a/src/gpu/xenos/d3d12/command_processor.cpp
++++ b/src/gpu/xenos/d3d12/command_processor.cpp
+@@ -20,6 +20,7 @@
+ #include <rex/math.h>
+ #include <rex/assert.h>
+ #include <rex/platform/perf.h>
++#include "gpu/xenos/gpu_stats.h"
+ #include "gpu/xenos/d3d12/command_processor.h"
+ #include "gpu/xenos/physical_memory.h"
+ #include "gpu/xenos/d3d12/d3d12_xenos_graphics_driver.h"
+@@ -2146,6 +2147,7 @@ bool D3D12CommandProcessor::IssueDraw([[maybe_unused]] xenos::PrimitiveType prim
+                                       [[maybe_unused]] u32 index_count,
+                                       [[maybe_unused]] IndexBuffer* index_buffer_info,
+                                       [[maybe_unused]] bool major_mode_explicit) {
++  rex::gpu::g_gpu_stats.Add(rex::gpu::g_gpu_stats.draws);
+ #if REXGPU_FINE_GRAINED_DRAW_SCOPES
+   REX_PROFILE_SCOPE("gpu");
+ #endif  // REXGPU_FINE_GRAINED_DRAW_SCOPES
+@@ -2715,6 +2717,7 @@ bool D3D12CommandProcessor::IssueDrawMemexportReadbackFastPath(u32 total_size) {
+ }
+ 
+ bool D3D12CommandProcessor::IssueCopy() {
++  rex::gpu::g_gpu_stats.Add(rex::gpu::g_gpu_stats.resolves);
+ #if REXGPU_FINE_GRAINED_DRAW_SCOPES
+   REX_PROFILE_SCOPE("gpu");
+ #endif  // REXGPU_FINE_GRAINED_DRAW_SCOPES
+@@ -2741,6 +2744,7 @@ bool D3D12CommandProcessor::IssueCopyReadbackResolvePath() {
+   if (!written_length) {
+     return true;
+   }
++  rex::gpu::g_gpu_stats.Add(rex::gpu::g_gpu_stats.resolve_readbacks);
+ 
+   if (!GetPhysicalForWrite(physical_memory_, written_address, written_length)) {
+     return true;
+@@ -3197,6 +3201,7 @@ bool D3D12CommandProcessor::BeginSubmission(bool is_guest_command) {
+ }
+ 
+ bool D3D12CommandProcessor::EndSubmission(bool is_swap) {
++  rex::gpu::g_gpu_stats.Add(rex::gpu::g_gpu_stats.submissions);
+   const gpu::d3d12::D3D12Provider& provider = GetD3D12Provider();
+ 
+   if (submission_open_ && !command_allocator_writable_first_) {
+diff --git a/src/gpu/xenos/d3d12/pipeline_cache.cpp b/src/gpu/xenos/d3d12/pipeline_cache.cpp
+index c65641d..1cb47fe 100644
+--- a/src/gpu/xenos/d3d12/pipeline_cache.cpp
++++ b/src/gpu/xenos/d3d12/pipeline_cache.cpp
+@@ -9,6 +9,7 @@
+  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
+  */
+ 
++#include "gpu/xenos/gpu_stats.h"
+ #include "thirdparty/dxbc/DXBCChecksum.h"
+ 
+ #ifndef XXH_INLINE_ALL
+@@ -2686,6 +2687,7 @@ ID3D12PipelineState* PipelineCache::CreateD3D12Pipeline(
+ 
+   ID3D12Device* device = command_processor_.GetD3D12Provider().GetDevice();
+   ID3D12PipelineState* state;
++  rex::gpu::g_gpu_stats.Add(rex::gpu::g_gpu_stats.pipelines_created);
+   if (FAILED(device->CreateGraphicsPipelineState(&state_desc, IID_PPV_ARGS(&state)))) {
+     if (runtime_description.pixel_shader != nullptr) {
+       REXGPU_ERROR("Failed to create graphics pipeline with VS {:016X}, PS {:016X}",
+diff --git a/src/gpu/xenos/d3d12/render_target_cache.cpp b/src/gpu/xenos/d3d12/render_target_cache.cpp
+index 7f114ad..de60f6e 100644
+--- a/src/gpu/xenos/d3d12/render_target_cache.cpp
++++ b/src/gpu/xenos/d3d12/render_target_cache.cpp
+@@ -9,6 +9,7 @@
+  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
+  */
+ 
++#include "gpu/xenos/gpu_stats.h"
+ #include "thirdparty/dxbc/DXBCChecksum.h"
+ 
+ #include <algorithm>
+@@ -3308,6 +3309,11 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
+     const std::vector<Transfer>* render_target_transfers,
+     const u64* render_target_resolve_clear_values,
+     const Transfer::Rectangle* resolve_clear_rectangle) {
++  rex::gpu::g_gpu_stats.Add(rex::gpu::g_gpu_stats.rt_updates);
++  for (u32 i = 0; i < render_target_count; ++i) {
++    if (render_target_transfers) rex::gpu::g_gpu_stats.Add(rex::gpu::g_gpu_stats.edram_transfers, render_target_transfers[i].size());
++  }
++  if (render_target_resolve_clear_values && resolve_clear_rectangle) rex::gpu::g_gpu_stats.Add(rex::gpu::g_gpu_stats.resolve_clears);
+   REX_ASSERT(GetPath() == Path::kHostRenderTargets);
+ 
+   const gpu::d3d12::D3D12Provider& provider = command_processor_.GetD3D12Provider();
+diff --git a/src/gpu/xenos/d3d12/shared_memory.cpp b/src/gpu/xenos/d3d12/shared_memory.cpp
+index d272434..9cb97cf 100644
+--- a/src/gpu/xenos/d3d12/shared_memory.cpp
++++ b/src/gpu/xenos/d3d12/shared_memory.cpp
+@@ -14,6 +14,7 @@
+ #include <vector>
+ 
+ #include <rex/assert.h>
++#include "gpu/xenos/gpu_stats.h"
+ #include "gpu/xenos/d3d12/command_processor.h"
+ #include "gpu/xenos/d3d12/shared_memory.h"
+ #include "gpu/xenos/physical_memory.h"
+@@ -294,6 +295,10 @@ bool D3D12SharedMemory::AllocateSparseHostGPUMemoryRange(u32 offset_allocations,
+ }
+ 
+ bool D3D12SharedMemory::UploadRanges(const std::vector<std::pair<u32, u32>>& upload_page_ranges) {
++  rex::gpu::g_gpu_stats.Add(rex::gpu::g_gpu_stats.upload_ranges, upload_page_ranges.size());
++  for (const auto& range : upload_page_ranges) {
++    rex::gpu::g_gpu_stats.Add(rex::gpu::g_gpu_stats.upload_bytes, u64(range.second) << GetPageSizeLog2());
++  }
+   if (upload_page_ranges.empty()) {
+     return true;
+   }
+diff --git a/src/gpu/xenos/gpu_stats.h b/src/gpu/xenos/gpu_stats.h
+new file mode 100644
+index 0000000..0365132
+--- /dev/null
++++ b/src/gpu/xenos/gpu_stats.h
+@@ -0,0 +1,58 @@
++/**
++ * @file        gpu/xenos/gpu_stats.h
++ *
++ * @brief       Per-frame GPU work counters for performance investigation (gpu.xenos.stats_log).
++ *
++ * @license     BSD 3-Clause License
++ *              See LICENSE file in the project root for full license text.
++ */
++
++#pragma once
++
++#include <atomic>
++
++#include <rex/types.h>
++
++namespace rex::gpu {
++
++/**
++ * Counts of the work the Xenos emulation does. Relaxed atomic adds, always on; the command
++ * processor logs averages per frame every few seconds when gpu.xenos.stats_log is set. The base
++ * library is linked into each driver module, so each module has its own copy, and only one
++ * driver runs.
++ */
++struct GpuStats {
++  std::atomic<u64> draws{0};               // host draws issued
++  std::atomic<u64> resolves{0};            // guest resolves (copies out of EDRAM)
++  std::atomic<u64> resolve_readbacks{0};   // resolves written back to guest memory by the CPU
++  std::atomic<u64> rt_updates{0};          // render target binding changes with transfers checked
++  std::atomic<u64> edram_transfers{0};     // EDRAM ownership transfers between host targets
++  std::atomic<u64> resolve_clears{0};      // render targets cleared by a resolve
++  std::atomic<u64> render_passes{0};       // host render passes begun
++  std::atomic<u64> upload_ranges{0};       // shared memory page ranges uploaded
++  std::atomic<u64> upload_bytes{0};        // shared memory bytes uploaded
++  std::atomic<u64> uploads_hoisted{0};     // uploads moved before the open render pass (Vulkan)
++  std::atomic<u64> textures_loaded{0};     // textures (re)loaded from guest memory
++  std::atomic<u64> pipelines_created{0};   // host pipelines created
++  std::atomic<u64> submissions{0};         // host command buffer submissions
++
++  // Frame pacing (gpu.xenos.pacing_log), host ticks.
++  std::atomic<u64> vblanks{0};             // guest vblank interrupts delivered
++  std::atomic<u64> vblank_late{0};         // vblanks more than 18 ms after the previous one
++  std::atomic<u64> vblank_max_gap{0};      // longest vblank gap since the last log, host ticks
++  std::atomic<u64> vblank_holds{0};        // vblanks held for a late frame (late_frame_vblank)
++  std::atomic<u64> vblank_hold_ticks{0};   // ... and the guest ticks they were held
++  std::atomic<u64> vblank_hold_timeouts{0};  // ... of which released by the one-refresh limit
++  std::atomic<u64> wrm_waits{0};           // WAIT_REG_MEM packets that had to wait
++  std::atomic<u64> wrm_wait_ticks{0};      // host ticks spent waiting in WAIT_REG_MEM
++  std::atomic<u64> wrm_vblank_waits{0};    // ... of which on a memory address (not a register)
++  std::atomic<u64> wrm_vblank_ticks{0};    // ... and their ticks
++
++  void Add(std::atomic<u64>& counter, u64 value = 1) {
++    counter.fetch_add(value, std::memory_order_relaxed);
++  }
++};
++
++inline GpuStats g_gpu_stats;
++
++}  // namespace rex::gpu
+diff --git a/src/gpu/xenos/host/deferred_stream.h b/src/gpu/xenos/host/deferred_stream.h
+index 22c1d76..357009c 100644
+--- a/src/gpu/xenos/host/deferred_stream.h
++++ b/src/gpu/xenos/host/deferred_stream.h
+@@ -44,8 +44,13 @@ class DeferredStream {
+ 
+   const uintmax_t* Data() const { return stream_.data(); }
+ 
++  uintmax_t* MutableData() { return stream_.data(); }
++
+   size_t Size() const { return stream_.size(); }
+ 
++  /** Drops the elements from size on, keeping the capacity. */
++  void Truncate(size_t size) { stream_.resize(size); }
++
+   /**
+    * Appends a header and room for its arguments.
+    *
+diff --git a/src/gpu/xenos/host/vulkan/vulkan_settings.h b/src/gpu/xenos/host/vulkan/vulkan_settings.h
+index 1201af1..502cb3d 100644
+--- a/src/gpu/xenos/host/vulkan/vulkan_settings.h
++++ b/src/gpu/xenos/host/vulkan/vulkan_settings.h
+@@ -36,6 +36,12 @@ class VulkanSettings : public SettingOwner {
+               "Submit command buffer when PM4 primary buffer ends");
+   REX_SETTING(bool, dynamic_rendering, true,
+               "Use VK_KHR_dynamic_rendering when the device supports it, render passes otherwise");
++  REX_SETTING(bool, hoist_shared_memory_uploads, false,
++              "Move shared memory uploads that no draw in the open render pass has read before "
++              "that pass instead of ending it (fewer render pass restarts)");
++  REX_SETTING(bool, shrink_render_area, false,
++              "Shrink each render pass to the bounding box of its draws' scissors and its clear "
++              "rectangles (less attachment load and store)");
+   REX_SETTING(i32, pipeline_creation_threads, -1,
+               "Number of pipeline creation threads for async pipeline creation, -1 for auto",
+               Range{-1, 32}, kRestart);
+diff --git a/src/gpu/xenos/pipeline/texture/cache.cpp b/src/gpu/xenos/pipeline/texture/cache.cpp
+index 1afb4bc..502c9d6 100644
+--- a/src/gpu/xenos/pipeline/texture/cache.cpp
++++ b/src/gpu/xenos/pipeline/texture/cache.cpp
+@@ -16,6 +16,7 @@
+ #include <rex/assert.h>
+ #include <rex/chrono.h>
+ #include <rex/platform/perf.h>
++#include "gpu/xenos/gpu_stats.h"
+ #include "gpu/xenos/pipeline/texture/cache.h"
+ #include <rex/xenos/texture.h>
+ #include <rex/xenos/register.h>
+@@ -658,6 +659,7 @@ TextureCache::Texture* TextureCache::FindOrCreateTexture(TextureKey key) {
+ }
+ 
+ bool TextureCache::LoadTextureData(Texture& texture) {
++  rex::gpu::g_gpu_stats.Add(rex::gpu::g_gpu_stats.textures_loaded);
+   PendingTextureLoad pending_load;
+   PendingSharedMemoryRange pending_ranges[2];
+   size_t pending_range_count = 0;
+diff --git a/src/gpu/xenos/shared_memory.cpp b/src/gpu/xenos/shared_memory.cpp
+index 7db4abe..afac9b9 100644
+--- a/src/gpu/xenos/shared_memory.cpp
++++ b/src/gpu/xenos/shared_memory.cpp
+@@ -438,11 +438,11 @@ bool SharedMemory::RequestRanges(const std::pair<u32, u32>* ranges, size_t count
+   REX_PROFILE_PLOT("gpu/shared_memory/request_ranges_upload_count",
+                    static_cast<u32>(upload_ranges_.size()));
+ 
+-  if (upload_ranges_.empty()) {
+-    return true;
++  if (!upload_ranges_.empty() && !UploadRanges(upload_ranges_)) {
++    return false;
+   }
+-
+-  return UploadRanges(upload_ranges_);
++  OnRangesRequested(merged_ranges);
++  return true;
+ }
+ 
+ bool SharedMemory::RequestRange(u32 start, u32 length) {
+diff --git a/src/gpu/xenos/shared_memory.h b/src/gpu/xenos/shared_memory.h
+index 7ff20e2..26759ee 100644
+--- a/src/gpu/xenos/shared_memory.h
++++ b/src/gpu/xenos/shared_memory.h
+@@ -150,6 +150,12 @@ class REX_GPU_XENOS_API SharedMemory : public rex::NonCopyable, public IPhysical
+    */
+   virtual bool UploadRanges(const std::vector<std::pair<u32, u32>>& upload_page_ranges) = 0;
+ 
++  /**
++   * Called at the end of every successful RequestRanges with its merged (start, length) byte
++   * ranges, after the uploads for them were recorded (Vulkan upload hoisting).
++   */
++  virtual void OnRangesRequested(const std::vector<std::pair<u32, u32>>& /*ranges*/) {}
++
+  private:
+   IPhysicalMemory& physical_memory_;
+   IPhysicalWriteWatch& write_watch_;
+diff --git a/src/gpu/xenos/vulkan/command_processor.cpp b/src/gpu/xenos/vulkan/command_processor.cpp
+index 97d4eff..dbba278 100644
+--- a/src/gpu/xenos/vulkan/command_processor.cpp
++++ b/src/gpu/xenos/vulkan/command_processor.cpp
+@@ -31,6 +31,7 @@
+ #include <rex/bit.h>
+ #include <rex/logging/log_category.h>
+ #include <rex/math.h>
++#include "gpu/xenos/gpu_stats.h"
+ #include "gpu/xenos/draw_state.h"
+ #include "gpu/xenos/pipeline/shader/shader.h"
+ #include "gpu/xenos/pipeline/shader/spirv_translator.h"
+@@ -2934,10 +2935,14 @@ void VulkanCommandProcessor::SubmitBarriersAndEnterRenderTargetCacheRenderPass(
+       deferred_command_buffer_.CmdVkEndRenderPass();
+     }
+     in_render_pass_ = false;
++    if (shared_memory_) {
++      shared_memory_->RenderPassEnded();
++    }
+   }
+ 
+   current_render_pass_ = use_dynamic_rendering ? VK_NULL_HANDLE : render_pass;
+   current_framebuffer_ = framebuffer;
++  render_pass_hoist_position_ = deferred_command_buffer_.stream_position();
+ 
+   if (use_dynamic_rendering) {
+     VkRenderingAttachmentInfo color_attachments[xenos::kMaxColorRenderTargets];
+@@ -3006,10 +3011,14 @@ void VulkanCommandProcessor::SubmitBarriersAndEnterRenderTargetCacheRenderPass(
+       deferred_command_buffer_.CmdVkEndRenderPass();
+     }
+     in_render_pass_ = false;
++    if (shared_memory_) {
++      shared_memory_->RenderPassEnded();
++    }
+   }
+ 
+   current_render_pass_ = use_dynamic_rendering ? VK_NULL_HANDLE : render_pass;
+   current_framebuffer_ = framebuffer;
++  render_pass_hoist_position_ = deferred_command_buffer_.stream_position();
+ 
+   if (use_dynamic_rendering) {
+     VkRenderingAttachmentInfo color_attachment = {};
+@@ -3085,6 +3094,9 @@ void VulkanCommandProcessor::EndRenderPass() {
+   current_render_pass_ = VK_NULL_HANDLE;
+   current_framebuffer_ = nullptr;
+   in_render_pass_ = false;
++  if (shared_memory_) {
++    shared_memory_->RenderPassEnded();
++  }
+ }
+ 
+ VkDescriptorSet VulkanCommandProcessor::AllocateSingleTransientDescriptor(
+@@ -3404,6 +3416,7 @@ Shader* VulkanCommandProcessor::LoadShader(xenos::ShaderType shader_type,
+ 
+ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type, u32 index_count,
+                                        IndexBuffer* index_buffer_info, bool major_mode_explicit) {
++  rex::gpu::g_gpu_stats.Add(rex::gpu::g_gpu_stats.draws);
+ #if REXGPU_FINE_GRAINED_DRAW_SCOPES
+   REX_PROFILE_SCOPE("gpu");
+ #endif  // REXGPU_FINE_GRAINED_DRAW_SCOPES
+@@ -3880,6 +3893,8 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type, u32 index
+     deferred_command_buffer_.CmdVkDrawIndexed(primitive_processing_result.host_draw_vertex_count, 1,
+                                               0, 0, 0);
+   }
++  // The vertex and index ranges this draw requested are now reads of the open render pass.
++  shared_memory_->CommitDrawReads();
+ 
+   if (!memexport_ranges_.empty()) {
+     for (const draw_state::MemExportRange& memexport_range : memexport_ranges_) {
+@@ -4112,6 +4127,7 @@ bool VulkanCommandProcessor::IssueDrawMemexportReadbackFastPath(u32 total_size)
+ }
+ 
+ bool VulkanCommandProcessor::IssueCopy() {
++  rex::gpu::g_gpu_stats.Add(rex::gpu::g_gpu_stats.resolves);
+ #if REXGPU_FINE_GRAINED_DRAW_SCOPES
+   REX_PROFILE_SCOPE("gpu");
+ #endif  // REXGPU_FINE_GRAINED_DRAW_SCOPES
+@@ -4145,6 +4161,7 @@ bool VulkanCommandProcessor::IssueCopyReadbackResolvePath() {
+   if (!written_length) {
+     return true;
+   }
++  rex::gpu::g_gpu_stats.Add(rex::gpu::g_gpu_stats.resolve_readbacks);
+ 
+   if (!GetPhysicalForWrite(physical_memory_, written_address, written_length)) {
+     return true;
+@@ -4846,6 +4863,9 @@ bool VulkanCommandProcessor::BeginSubmission(bool is_guest_command) {
+     current_render_pass_ = VK_NULL_HANDLE;
+     current_framebuffer_ = nullptr;
+     in_render_pass_ = false;
++    if (shared_memory_) {
++      shared_memory_->RenderPassEnded();
++    }
+     current_guest_graphics_pipeline_ = VK_NULL_HANDLE;
+     current_external_graphics_pipeline_ = VK_NULL_HANDLE;
+     current_external_compute_pipeline_ = VK_NULL_HANDLE;
+@@ -4921,6 +4941,7 @@ bool VulkanCommandProcessor::BeginSubmission(bool is_guest_command) {
+ }
+ 
+ bool VulkanCommandProcessor::EndSubmission(bool is_swap) {
++  rex::gpu::g_gpu_stats.Add(rex::gpu::g_gpu_stats.submissions);
+   const gpu::vulkan::VulkanDevice* const vulkan_device = GetVulkanDevice();
+   const gpu::vulkan::VulkanDevice::Functions& dfn = vulkan_device->GetFunctions();
+   const VkDevice device = vulkan_device->GetDevice();
+diff --git a/src/gpu/xenos/vulkan/command_processor.h b/src/gpu/xenos/vulkan/command_processor.h
+index 80f1c21..267890d 100644
+--- a/src/gpu/xenos/vulkan/command_processor.h
++++ b/src/gpu/xenos/vulkan/command_processor.h
+@@ -148,6 +148,13 @@ class VulkanCommandProcessor : public CommandProcessor {
+   }
+ 
+   bool IsSubmissionOpen() const { return submission_open_; }
++
++  /**
++   * Upload hoisting: whether a render pass is open, and the deferred command stream position of
++   * its beginning (commands moved there execute before the pass).
++   */
++  bool IsInRenderPass() const { return in_render_pass_; }
++  size_t GetRenderPassHoistPosition() const { return render_pass_hoist_position_; }
+   u64 GetCurrentSubmission() const {
+     return submission_completed_ + static_cast<u64>(submissions_in_flight_fences_.size()) + 1;
+   }
+@@ -758,6 +765,7 @@ class VulkanCommandProcessor : public CommandProcessor {
+   VkRenderPass current_render_pass_;
+   const VulkanRenderTargetCache::Framebuffer* current_framebuffer_;
+   bool in_render_pass_ = false;
++  size_t render_pass_hoist_position_ = 0;
+ 
+   /** Exactly one of the title and external graphics pipelines is bound, the other is null. */
+   VkPipeline current_guest_graphics_pipeline_;
+diff --git a/src/gpu/xenos/vulkan/deferred_command_buffer.cpp b/src/gpu/xenos/vulkan/deferred_command_buffer.cpp
+index fdefb09..8000327 100644
+--- a/src/gpu/xenos/vulkan/deferred_command_buffer.cpp
++++ b/src/gpu/xenos/vulkan/deferred_command_buffer.cpp
+@@ -9,12 +9,15 @@
+  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
+  */
+ 
++#include <algorithm>
++#include <climits>
+ #include <cstddef>
+ #include <cstdint>
+ #include <cstring>
+ 
+ #include <rex/assert.h>
+ #include <rex/platform/perf.h>
++#include "gpu/xenos/gpu_stats.h"
+ #include "gpu/xenos/vulkan/command_processor.h"
+ #include "gpu/xenos/vulkan/deferred_command_buffer.h"
+ #include <rex/math.h>
+@@ -29,6 +32,10 @@ DeferredCommandBuffer::DeferredCommandBuffer(const VulkanCommandProcessor& comma
+ 
+ void DeferredCommandBuffer::Reset() {
+   command_stream_.Clear();
++  pass_begin_offset_ = SIZE_MAX;
++  current_scissor_valid_ = false;
++  splice_stream_.clear();
++  splices_.clear();
+ }
+ 
+ void DeferredCommandBuffer::Execute(VkCommandBuffer command_buffer) {
+@@ -36,10 +43,26 @@ void DeferredCommandBuffer::Execute(VkCommandBuffer command_buffer) {
+   REX_PROFILE_SCOPE("gpu");
+ #endif  // REXGPU_FINE_GRAINED_DRAW_SCOPES
+ 
++  // Splices are recorded with non-decreasing positions (render passes only move forward), and ones
++  // at the same position run in recording order; stable_sort keeps that if it is ever not so.
++  auto by_position = [](const Splice& a, const Splice& b) { return a.position < b.position; };
++  if (!std::is_sorted(splices_.begin(), splices_.end(), by_position)) {
++    std::stable_sort(splices_.begin(), splices_.end(), by_position);
++  }
++  size_t position = 0;
++  for (const Splice& splice : splices_) {
++    ExecuteRange(command_buffer, command_stream_.Data() + position, splice.position - position);
++    ExecuteRange(command_buffer, splice_stream_.data() + splice.start, splice.length);
++    position = splice.position;
++  }
++  ExecuteRange(command_buffer, command_stream_.Data() + position,
++               command_stream_.Size() - position);
++}
++
++void DeferredCommandBuffer::ExecuteRange(VkCommandBuffer command_buffer, const uintmax_t* stream,
++                                         size_t stream_remaining) {
+   const gpu::vulkan::VulkanDevice::Functions& dfn =
+       command_processor_.GetVulkanDevice()->GetFunctions();
+-  const uintmax_t* stream = command_stream_.Data();
+-  size_t stream_remaining = command_stream_.Size();
+   while (stream_remaining) {
+     const CommandHeader& header = *reinterpret_cast<const CommandHeader*>(stream);
+     stream += kCommandHeaderSizeElements;
+@@ -64,6 +87,7 @@ void DeferredCommandBuffer::Execute(VkCommandBuffer command_buffer) {
+         } else {
+           render_pass_begin_info.pClearValues = nullptr;
+         }
++        rex::gpu::g_gpu_stats.Add(rex::gpu::g_gpu_stats.render_passes);
+         dfn.vkCmdBeginRenderPass(command_buffer, &render_pass_begin_info, args.contents);
+       } break;
+ 
+@@ -219,6 +243,7 @@ void DeferredCommandBuffer::Execute(VkCommandBuffer command_buffer) {
+         rendering_info.pColorAttachments = color_attachments;
+         rendering_info.pDepthAttachment = depth_attachment;
+         rendering_info.pStencilAttachment = stencil_attachment;
++        rex::gpu::g_gpu_stats.Add(rex::gpu::g_gpu_stats.render_passes);
+         dfn.vkCmdBeginRendering(command_buffer, &rendering_info);
+       } break;
+ 
+@@ -386,6 +411,9 @@ void DeferredCommandBuffer::CmdVkBeginRendering(const VkRenderingInfo* rendering
+     arguments_size += sizeof(VkRenderingAttachmentInfo);
+   }
+ 
++  pass_begin_offset_ = command_stream_.Size();
++  pass_begin_scissor_ = current_scissor_;
++  pass_begin_scissor_valid_ = current_scissor_valid_;
+   u8* args_ptr = reinterpret_cast<u8*>(WriteCommand(Command::kVkBeginRendering, arguments_size));
+   auto& args = *reinterpret_cast<ArgsVkBeginRendering*>(args_ptr);
+   args.flags = rendering_info->flags;
+@@ -410,6 +438,106 @@ void DeferredCommandBuffer::CmdVkBeginRendering(const VkRenderingInfo* rendering
+   }
+ }
+ 
++void DeferredCommandBuffer::ShrinkRenderArea() {
++  size_t begin = pass_begin_offset_;
++  pass_begin_offset_ = SIZE_MAX;
++  if (begin == SIZE_MAX || begin >= command_stream_.Size() ||
++      !command_processor_.GetVulkanSettings().shrink_render_area.Get()) {
++    return;
++  }
++  uintmax_t* stream = command_stream_.MutableData();
++  const auto& begin_header = *reinterpret_cast<const CommandHeader*>(stream + begin);
++  uintmax_t* begin_args = stream + begin + kCommandHeaderSizeElements;
++  VkRect2D* render_area;
++  if (begin_header.command == Command::kVkBeginRendering) {
++    auto& args = *reinterpret_cast<ArgsVkBeginRendering*>(begin_args);
++    const auto* attachments = reinterpret_cast<const VkRenderingAttachmentInfo*>(
++        reinterpret_cast<const u8*>(begin_args) +
++        rex::RoundUpPow2(sizeof(ArgsVkBeginRendering), alignof(VkRenderingAttachmentInfo)));
++    u32 attachment_count = args.color_attachment_count + u32(args.has_depth_attachment) +
++                           u32(args.has_stencil_attachment);
++    for (u32 i = 0; i < attachment_count; ++i) {
++      // A clear load op and an MSAA resolve both cover the whole render area: keep it whole.
++      if (attachments[i].resolveMode != VK_RESOLVE_MODE_NONE ||
++          attachments[i].loadOp == VK_ATTACHMENT_LOAD_OP_CLEAR) {
++        return;
++      }
++    }
++    render_area = &args.render_area;
++  } else if (begin_header.command == Command::kVkBeginRenderPass) {
++    auto& args = *reinterpret_cast<ArgsVkBeginRenderPass*>(begin_args);
++    // Clear values mean load op clears in the render pass object, which cover the render area.
++    if (args.clear_value_count) {
++      return;
++    }
++    render_area = &args.render_area;
++  } else {
++    return;
++  }
++  // Bounding box of everything the pass writes.
++  i64 x0 = INT64_MAX, y0 = INT64_MAX, x1 = INT64_MIN, y1 = INT64_MIN;
++  auto add = [&](const VkRect2D& r) {
++    x0 = std::min<i64>(x0, r.offset.x);
++    y0 = std::min<i64>(y0, r.offset.y);
++    x1 = std::max<i64>(x1, i64(r.offset.x) + r.extent.width);
++    y1 = std::max<i64>(y1, i64(r.offset.y) + r.extent.height);
++  };
++  VkRect2D scissor = pass_begin_scissor_;
++  bool scissor_valid = pass_begin_scissor_valid_;
++  size_t pos = begin;
++  while (pos < command_stream_.Size()) {
++    const auto& header = *reinterpret_cast<const CommandHeader*>(stream + pos);
++    const u8* args = reinterpret_cast<const u8*>(stream + pos + kCommandHeaderSizeElements);
++    switch (header.command) {
++      case Command::kVkSetScissor: {
++        const auto& a = *reinterpret_cast<const ArgsVkSetScissor*>(args);
++        if (a.first_scissor == 0 && a.scissor_count) {
++          scissor = *reinterpret_cast<const VkRect2D*>(
++              args + rex::RoundUpPow2(sizeof(ArgsVkSetScissor), alignof(VkRect2D)));
++          scissor_valid = true;
++        }
++      } break;
++      case Command::kVkDraw:
++      case Command::kVkDrawIndexed:
++        if (!scissor_valid) {
++          return;  // An unbounded draw: keep the full area.
++        }
++        add(scissor);
++        break;
++      case Command::kVkClearAttachments: {
++        const auto& a = *reinterpret_cast<const ArgsVkClearAttachments*>(args);
++        size_t rects_offset = rex::RoundUpPow2(
++            rex::RoundUpPow2(sizeof(ArgsVkClearAttachments), alignof(VkClearAttachment)) +
++                sizeof(VkClearAttachment) * a.attachment_count,
++            alignof(VkClearRect));
++        const auto* rects = reinterpret_cast<const VkClearRect*>(args + rects_offset);
++        for (u32 i = 0; i < a.rect_count; ++i) {
++          add(rects[i].rect);
++        }
++      } break;
++      default:
++        break;
++    }
++    pos += kCommandHeaderSizeElements + header.arguments_size_elements;
++  }
++  if (x0 >= x1 || y0 >= y1) {
++    return;  // Nothing written: leave the pass as recorded.
++  }
++  i64 ax0 = render_area->offset.x, ay0 = render_area->offset.y;
++  i64 ax1 = ax0 + render_area->extent.width, ay1 = ay0 + render_area->extent.height;
++  x0 = std::max(x0, ax0);
++  y0 = std::max(y0, ay0);
++  x1 = std::min(x1, ax1);
++  y1 = std::min(y1, ay1);
++  if (x0 >= x1 || y0 >= y1) {
++    return;
++  }
++  render_area->offset.x = i32(x0);
++  render_area->offset.y = i32(y0);
++  render_area->extent.width = u32(x1 - x0);
++  render_area->extent.height = u32(y1 - y0);
++}
++
+ void* DeferredCommandBuffer::WriteCommand(Command command, size_t arguments_size_bytes) {
+   return command_stream_.Write(command, arguments_size_bytes);
+ }
+diff --git a/src/gpu/xenos/vulkan/deferred_command_buffer.h b/src/gpu/xenos/vulkan/deferred_command_buffer.h
+index 23552ca..ff077d4 100644
+--- a/src/gpu/xenos/vulkan/deferred_command_buffer.h
++++ b/src/gpu/xenos/vulkan/deferred_command_buffer.h
+@@ -33,6 +33,27 @@ class DeferredCommandBuffer {
+   void Reset();
+   void Execute(VkCommandBuffer command_buffer);
+ 
++  /** Position, in stream elements, where the next command is written. */
++  size_t stream_position() const { return command_stream_.Size(); }
++
++  /**
++   * Moves the commands written since tail_start so they execute at insert_position instead,
++   * before the commands recorded there and after earlier moves to the same position. The tail
++   * goes to a side stream that Execute interleaves, so a move costs only the tail's length.
++   * (Upload hoisting, ported from the Skullburglar recomp's ReXGlue patch 0003, BSD 3-Clause.)
++   */
++  void MoveTailTo(size_t insert_position, size_t tail_start) {
++    REX_ASSERT(insert_position <= tail_start && tail_start <= command_stream_.Size());
++    size_t length = command_stream_.Size() - tail_start;
++    if (!length) {
++      return;
++    }
++    splices_.push_back({insert_position, splice_stream_.size(), length});
++    splice_stream_.insert(splice_stream_.end(), command_stream_.Data() + tail_start,
++                          command_stream_.Data() + command_stream_.Size());
++    command_stream_.Truncate(tail_start);
++  }
++
+   // render_pass_begin->pNext must be null.
+   void CmdVkBeginRenderPass(const VkRenderPassBeginInfo* render_pass_begin,
+                             VkSubpassContents contents) {
+@@ -45,6 +66,9 @@ class DeferredCommandBuffer {
+       clear_values_offset = arguments_size;
+       arguments_size += sizeof(VkClearValue) * clear_value_count;
+     }
++    pass_begin_offset_ = command_stream_.Size();
++    pass_begin_scissor_ = current_scissor_;
++    pass_begin_scissor_valid_ = current_scissor_valid_;
+     u8* args_ptr = reinterpret_cast<u8*>(WriteCommand(Command::kVkBeginRenderPass, arguments_size));
+     auto& args = *reinterpret_cast<ArgsVkBeginRenderPass*>(args_ptr);
+     args.render_pass = render_pass_begin->renderPass;
+@@ -262,11 +286,17 @@ class DeferredCommandBuffer {
+     args.query = query;
+   }
+ 
+-  void CmdVkEndRenderPass() { WriteCommand(Command::kVkEndRenderPass, 0); }
++  void CmdVkEndRenderPass() {
++    ShrinkRenderArea();
++    WriteCommand(Command::kVkEndRenderPass, 0);
++  }
+ 
+   // Requires VK_KHR_dynamic_rendering or Vulkan 1.3.
+   void CmdVkBeginRendering(const VkRenderingInfo* rendering_info);
+-  void CmdVkEndRendering() { WriteCommand(Command::kVkEndRendering, 0); }
++  void CmdVkEndRendering() {
++    ShrinkRenderArea();
++    WriteCommand(Command::kVkEndRendering, 0);
++  }
+ 
+   void CmdVkResetQueryPool(VkQueryPool query_pool, u32 first_query, u32 query_count) {
+     auto& args = *reinterpret_cast<ArgsVkResetQueryPool*>(
+@@ -313,6 +343,10 @@ class DeferredCommandBuffer {
+   }
+ 
+   void CmdVkSetScissor(u32 first_scissor, u32 scissor_count, const VkRect2D* scissors) {
++    if (first_scissor == 0 && scissor_count) {
++      current_scissor_ = scissors[0];
++      current_scissor_valid_ = true;
++    }
+     const size_t header_size = rex::RoundUpPow2(sizeof(ArgsVkSetScissor), alignof(VkRect2D));
+     u8* args_ptr = reinterpret_cast<u8*>(
+         WriteCommand(Command::kVkSetScissor, header_size + sizeof(VkRect2D) * scissor_count));
+@@ -576,8 +610,34 @@ class DeferredCommandBuffer {
+ 
+   const VulkanCommandProcessor& command_processor_;
+ 
++  void ExecuteRange(VkCommandBuffer command_buffer, const uintmax_t* stream,
++                    size_t stream_remaining);
++
++  /**
++   * Render area shrinking (gpu.vulkan.shrink_render_area). Host render targets span the whole
++   * EDRAM height and passes begin with that extent while draws touch far less; attachment load
++   * and store cover the whole render area. At the end of a pass its recorded begin is narrowed to
++   * the bounding box of the scissors of its draws and of its clear rectangles; Vulkan leaves
++   * pixels outside the render area untouched, so the result is the same. (Ported from the
++   * Skullburglar recomp's ReXGlue patch 0002, BSD 3-Clause.)
++   */
++  void ShrinkRenderArea();
++  /** Element offset of the open pass's begin command, SIZE_MAX when none is open. */
++  size_t pass_begin_offset_ = SIZE_MAX;
++  VkRect2D pass_begin_scissor_{};
++  bool pass_begin_scissor_valid_ = false;
++  VkRect2D current_scissor_{};
++  bool current_scissor_valid_ = false;
++
+   /** uintmax_t elements give uint64_t and pointer alignment to all structures. */
+   Stream command_stream_;
++
++  /** MoveTailTo: command ranges executed just before command_stream_[position]. */
++  struct Splice {
++    size_t position, start, length;
++  };
++  std::vector<uintmax_t> splice_stream_;
++  std::vector<Splice> splices_;
+ };
+ 
+ }  // namespace rex::gpu::vulkan
+diff --git a/src/gpu/xenos/vulkan/pipeline_cache.cpp b/src/gpu/xenos/vulkan/pipeline_cache.cpp
+index d476c48..d617487 100644
+--- a/src/gpu/xenos/vulkan/pipeline_cache.cpp
++++ b/src/gpu/xenos/vulkan/pipeline_cache.cpp
+@@ -36,6 +36,7 @@
+ #include <rex/platform/thread.h>
+ #include <rex/platform/sync.h>
+ #include <rex/memory.h>
++#include "gpu/xenos/gpu_stats.h"
+ #include "gpu/xenos/draw_state.h"
+ #include "gpu/xenos/pipeline_priority.h"
+ #include "gpu/xenos/pipeline/shader/spirv_builder.h"
+@@ -3079,6 +3080,7 @@ bool VulkanPipelineCache::CreatePipeline(const PipelineCreationArguments& creati
+   const gpu::vulkan::VulkanDevice::Functions& dfn = vulkan_device->GetFunctions();
+   const VkDevice device = vulkan_device->GetDevice();
+   VkPipeline pipeline;
++  rex::gpu::g_gpu_stats.Add(rex::gpu::g_gpu_stats.pipelines_created);
+   VkResult create_result = dfn.vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1,
+                                                          &pipeline_create_info, nullptr, &pipeline);
+   if (create_result != VK_SUCCESS) {
+diff --git a/src/gpu/xenos/vulkan/render_target_cache.cpp b/src/gpu/xenos/vulkan/render_target_cache.cpp
+index 388026e..949f64a 100644
+--- a/src/gpu/xenos/vulkan/render_target_cache.cpp
++++ b/src/gpu/xenos/vulkan/render_target_cache.cpp
+@@ -25,6 +25,7 @@
+ #include <SPIRV/GLSL.std.450.h>
+ 
+ #include <rex/assert.h>
++#include "gpu/xenos/gpu_stats.h"
+ #include "gpu/xenos/pipeline/shader/spirv_builder.h"
+ #include "gpu/xenos/pipeline/shader/spirv_translator.h"
+ #include "gpu/xenos/pipeline/texture/cache.h"
+@@ -4158,6 +4159,11 @@ void VulkanRenderTargetCache::PerformTransfersAndResolveClears(
+     const std::vector<Transfer>* render_target_transfers,
+     const u64* render_target_resolve_clear_values,
+     const Transfer::Rectangle* resolve_clear_rectangle) {
++  rex::gpu::g_gpu_stats.Add(rex::gpu::g_gpu_stats.rt_updates);
++  for (u32 i = 0; i < render_target_count; ++i) {
++    if (render_target_transfers) rex::gpu::g_gpu_stats.Add(rex::gpu::g_gpu_stats.edram_transfers, render_target_transfers[i].size());
++  }
++  if (render_target_resolve_clear_values && resolve_clear_rectangle) rex::gpu::g_gpu_stats.Add(rex::gpu::g_gpu_stats.resolve_clears);
+   REX_ASSERT(GetPath() == Path::kHostRenderTargets);
+ 
+   const gpu::vulkan::VulkanDevice* const vulkan_device = command_processor_.GetVulkanDevice();
+diff --git a/src/gpu/xenos/vulkan/shared_memory.cpp b/src/gpu/xenos/vulkan/shared_memory.cpp
+index 7b91460..cbe57c6 100644
+--- a/src/gpu/xenos/vulkan/shared_memory.cpp
++++ b/src/gpu/xenos/vulkan/shared_memory.cpp
+@@ -15,6 +15,7 @@
+ #include <vector>
+ 
+ #include <rex/assert.h>
++#include "gpu/xenos/gpu_stats.h"
+ #include "gpu/xenos/vulkan/command_processor.h"
+ #include "gpu/xenos/vulkan/deferred_command_buffer.h"
+ #include "gpu/xenos/vulkan/shared_memory.h"
+@@ -253,17 +254,48 @@ bool VulkanSharedMemory::AllocateSparseHostGPUMemoryRange(u32 offset_allocations
+ }
+ 
+ bool VulkanSharedMemory::UploadRanges(const std::vector<std::pair<u32, u32>>& upload_page_ranges) {
++  rex::gpu::g_gpu_stats.Add(rex::gpu::g_gpu_stats.upload_ranges, upload_page_ranges.size());
++  for (const auto& range : upload_page_ranges) {
++    rex::gpu::g_gpu_stats.Add(rex::gpu::g_gpu_stats.upload_bytes, u64(range.second) << GetPageSizeLog2());
++  }
+   if (upload_page_ranges.empty()) {
+     return true;
+   }
+   // The ranges are sorted, so front and back bound the barrier.
+-  Use(Usage::kTransferDestination,
+-      std::make_pair(upload_page_ranges.front().first << GetPageSizeLog2(),
+-                     (upload_page_ranges.back().first + upload_page_ranges.back().second -
+-                      upload_page_ranges.front().first)
+-                         << GetPageSizeLog2()));
+-  command_processor_.SubmitBarriers(true);
+   DeferredCommandBuffer& command_buffer = command_processor_.GetDeferredCommandBuffer();
++  const u32 upload_start = upload_page_ranges.front().first << GetPageSizeLog2();
++  const u32 upload_length = (upload_page_ranges.back().first + upload_page_ranges.back().second -
++                             upload_page_ranges.front().first)
++                            << GetPageSizeLog2();
++  // Copies aren't allowed inside a render pass, so every upload used to end the open one: a full
++  // attachment store and load each time, hundreds per frame for streamed vertices. When no draw
++  // already recorded in the pass reads the uploaded pages, the copy runs before the pass instead,
++  // with the same result. (Ported from the Skullburglar recomp's ReXGlue patch 0003, BSD 3-Clause.)
++  const bool hoist = command_processor_.GetVulkanSettings().hoist_shared_memory_uploads.Get() &&
++                     command_processor_.IsInRenderPass() && last_usage_ == Usage::kRead &&
++                     !last_written_range_.second && !OverlapsPassReads(upload_page_ranges);
++  size_t hoist_tail_start = 0;
++  VkBufferMemoryBarrier hoist_barrier = {};
++  VkPipelineStageFlags read_stage_mask = 0;
++  VkAccessFlags read_access_mask = 0;
++  if (hoist) {
++    rex::gpu::g_gpu_stats.Add(rex::gpu::g_gpu_stats.uploads_hoisted);
++    hoist_tail_start = command_buffer.stream_position();
++    GetUsageMasks(Usage::kRead, read_stage_mask, read_access_mask);
++    hoist_barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
++    hoist_barrier.srcAccessMask = read_access_mask;
++    hoist_barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
++    hoist_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
++    hoist_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
++    hoist_barrier.buffer = buffer_;
++    hoist_barrier.offset = upload_start;
++    hoist_barrier.size = upload_length;
++    command_buffer.CmdVkPipelineBarrier(read_stage_mask, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0,
++                                        nullptr, 1, &hoist_barrier, 0, nullptr);
++  } else {
++    Use(Usage::kTransferDestination, std::make_pair(upload_start, upload_length));
++    command_processor_.SubmitBarriers(true);
++  }
+   u64 submission_current = command_processor_.GetCurrentSubmission();
+   bool successful = true;
+   upload_regions_.clear();
+@@ -320,9 +352,51 @@ bool VulkanSharedMemory::UploadRanges(const std::vector<std::pair<u32, u32>>& up
+                                    upload_regions_.data());
+     upload_regions_.clear();
+   }
++  if (hoist) {
++    hoist_barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
++    hoist_barrier.dstAccessMask = read_access_mask;
++    command_buffer.CmdVkPipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT, read_stage_mask, 0, 0,
++                                        nullptr, 1, &hoist_barrier, 0, nullptr);
++    // Uploads moved to the same position stay in order with each other (MoveTailTo).
++    command_buffer.MoveTailTo(command_processor_.GetRenderPassHoistPosition(), hoist_tail_start);
++  }
+   return successful;
+ }
+ 
++void VulkanSharedMemory::OnRangesRequested(const std::vector<std::pair<u32, u32>>& ranges) {
++  draw_reads_.insert(draw_reads_.end(), ranges.begin(), ranges.end());
++}
++
++void VulkanSharedMemory::CommitDrawReads() {
++  for (const std::pair<u32, u32>& range : draw_reads_) {
++    // Merge with the previous range when contiguous or overlapping (streamed vertices).
++    if (!pass_reads_.empty()) {
++      std::pair<u32, u32>& last = pass_reads_.back();
++      u64 last_end = u64(last.first) + last.second;
++      if (range.first >= last.first && range.first <= last_end) {
++        last.second = u32(std::max(last_end, u64(range.first) + range.second) - last.first);
++        continue;
++      }
++    }
++    pass_reads_.push_back(range);
++  }
++  draw_reads_.clear();
++}
++
++bool VulkanSharedMemory::OverlapsPassReads(
++    const std::vector<std::pair<u32, u32>>& upload_page_ranges) const {
++  for (const std::pair<u32, u32>& upload : upload_page_ranges) {
++    u64 start = u64(upload.first) << GetPageSizeLog2();
++    u64 end = start + (u64(upload.second) << GetPageSizeLog2());
++    for (const std::pair<u32, u32>& read : pass_reads_) {
++      if (read.first < end && start < u64(read.first) + read.second) {
++        return true;
++      }
++    }
++  }
++  return false;
++}
++
+ void VulkanSharedMemory::GetUsageMasks(Usage usage, VkPipelineStageFlags& stage_mask,
+                                        VkAccessFlags& access_mask) const {
+   switch (usage) {
+diff --git a/src/gpu/xenos/vulkan/shared_memory.h b/src/gpu/xenos/vulkan/shared_memory.h
+index e3040bf..13384f7 100644
+--- a/src/gpu/xenos/vulkan/shared_memory.h
++++ b/src/gpu/xenos/vulkan/shared_memory.h
+@@ -53,10 +53,19 @@ class VulkanSharedMemory : public SharedMemory {
+ 
+   VkBuffer GetBuffer() const { return buffer_; }
+ 
++  /**
++   * Upload hoisting (gpu.vulkan.hoist_shared_memory_uploads): the ranges requested since the last
++   * draw become reads of the open render pass once that draw is recorded; uploads that overlap
++   * none of them are moved before the pass instead of ending it.
++   */
++  void CommitDrawReads();
++  void RenderPassEnded() { pass_reads_.clear(); }
++
+  protected:
+   bool AllocateSparseHostGPUMemoryRange(u32 offset_allocations, u32 length_allocations) override;
+ 
+   bool UploadRanges(const std::vector<std::pair<u32, u32>>& upload_page_ranges) override;
++  void OnRangesRequested(const std::vector<std::pair<u32, u32>>& ranges) override;
+ 
+  private:
+   void GetUsageMasks(Usage usage, VkPipelineStageFlags& stage_mask,
+@@ -75,6 +84,11 @@ class VulkanSharedMemory : public SharedMemory {
+ 
+   std::unique_ptr<gpu::vulkan::VulkanUploadBufferPool> upload_buffer_pool_;
+   std::vector<VkBufferCopy> upload_regions_;
++
++  bool OverlapsPassReads(const std::vector<std::pair<u32, u32>>& upload_page_ranges) const;
++  /** (start, length) in bytes. */
++  std::vector<std::pair<u32, u32>> draw_reads_;
++  std::vector<std::pair<u32, u32>> pass_reads_;
+ };
+ 
+ }  // namespace rex::gpu::vulkan
+diff --git a/src/gpu/xenos/xenos_graphics_driver_base.cpp b/src/gpu/xenos/xenos_graphics_driver_base.cpp
+index dcb5ac7..0859380 100644
+--- a/src/gpu/xenos/xenos_graphics_driver_base.cpp
++++ b/src/gpu/xenos/xenos_graphics_driver_base.cpp
+@@ -23,6 +23,7 @@
+ 
+ #include <rex/string/text.h>
+ #include "gpu/xenos/command_processor.h"
++#include "gpu/xenos/gpu_stats.h"
+ #include "gpu/xenos/vblank_pacing.h"
+ #include <rex/assert.h>
+ #include <rex/chrono.h>
+@@ -169,11 +170,65 @@ Result<void> XenosGraphicsDriverBase::AttachTitle(const TitleInfo& info, IPhysic
+     const f64 nanoseconds_per_tick = 1e9 / static_cast<f64>(guest_tick_frequency);
+     constexpr std::chrono::milliseconds kLongestSleep{50};
+     u64 last_frame_time = Clock::QueryGuestTickCount();
++    // late_frame_vblank: gate entries already answered by a delivered vblank. Waits that started
++    // within the last 100 ms mean the title paces on the post-swap vblank wait right now.
++    u64 gate_seen = 0;
++    const u64 gated_window_ticks = std::max<u64>(1, guest_tick_frequency / 10);
+     while (vsync_worker_running_) {
+-      u64 interval_ticks = IsGuestVblankPaced() ? vsync_interval_ticks : no_vsync_interval_ticks;
+-      DeliverVblanks(
++      const bool paced = IsGuestVblankPaced();
++      u64 interval_ticks = paced ? vsync_interval_ticks : no_vsync_interval_ticks;
++      const bool hold_late = paced && late_frame_vblank.Get();
++      if (hold_late && Clock::QueryGuestTickCount() - last_frame_time >= interval_ticks) {
++        std::unique_lock lock(gate_mutex_);
++        const u64 due_time = Clock::QueryGuestTickCount();
++        if (last_gate_tick_ != 0 && due_time - last_gate_tick_ < gated_window_ticks &&
++            gate_entries_ == gate_seen) {
++          // The frame for this vblank is still being built: hold the vblank until the command
++          // processor reaches the vblank wait, for at most one more refresh. Then deliver it and
++          // restart the grid there, so the next frame gets a whole refresh.
++          const u64 deadline = last_frame_time + 2 * interval_ticks;
++          bool timed_out = false;
++          while (vsync_worker_running_ && gate_entries_ == gate_seen) {
++            const u64 now = Clock::QueryGuestTickCount();
++            if (now >= deadline) {
++              timed_out = true;
++              break;
++            }
++            gate_signal_.wait_for(
++                lock, std::min<std::chrono::nanoseconds>(
++                          std::chrono::nanoseconds(static_cast<i64>(
++                              static_cast<f64>(deadline - now) * nanoseconds_per_tick)),
++                          kLongestSleep));
++          }
++          gate_seen = gate_entries_;
++          lock.unlock();
++          if (!vsync_worker_running_) {
++            break;
++          }
++          const u64 release_time = Clock::QueryGuestTickCount();
++          g_gpu_stats.Add(g_gpu_stats.vblank_holds);
++          g_gpu_stats.Add(g_gpu_stats.vblank_hold_ticks, release_time - due_time);
++          if (timed_out) {
++            g_gpu_stats.Add(g_gpu_stats.vblank_hold_timeouts);
++          }
++          MarkVblank();
++          last_frame_time = release_time;
++          continue;
++        }
++      }
++      u64 gate_before = 0;
++      if (hold_late) {
++        std::lock_guard lock(gate_mutex_);
++        gate_before = gate_entries_;
++      }
++      const u32 delivered = DeliverVblanks(
+           Clock::QueryGuestTickCount(), last_frame_time, interval_ticks, kMaxVblankCatchUp,
+           [this] { MarkVblank(); }, [this] { return vsync_worker_running_.load(); });
++      if (delivered != 0) {
++        // Entries counted before these vblanks were answered by them. Taking the count before
++        // delivering errs toward not holding the next vblank.
++        gate_seen = gate_before;
++      }
+       const u64 current_time = Clock::QueryGuestTickCount();
+       const u64 next_time = last_frame_time + interval_ticks;
+       const u64 remaining_ticks = next_time > current_time ? next_time - current_time : 0;
+@@ -198,7 +253,12 @@ Result<void> XenosGraphicsDriverBase::AttachTitle(const TitleInfo& info, IPhysic
+ }
+ 
+ void XenosGraphicsDriverBase::DetachTitle() {
+-  vsync_worker_running_ = false;
++  {
++    // Wake a vsync thread holding a vblank for a late frame (late_frame_vblank).
++    std::lock_guard lock(gate_mutex_);
++    vsync_worker_running_ = false;
++  }
++  gate_signal_.notify_all();
+   vsync_worker_thread_ = ScopeGuard();
+ 
+   if (command_processor_) {
+@@ -292,6 +352,15 @@ void XenosGraphicsDriverBase::NotifySwap() {
+   frame_signal_.notify_all();
+ }
+ 
++void XenosGraphicsDriverBase::NotifyVblankGateEntered() {
++  {
++    std::lock_guard lock(gate_mutex_);
++    ++gate_entries_;
++    last_gate_tick_ = std::max<u64>(1, Clock::QueryGuestTickCount());
++  }
++  gate_signal_.notify_all();
++}
++
+ void XenosGraphicsDriverBase::DispatchInterruptCallback(u32 source, u32 cpu) {
+   if (auto raised = guest_interrupts_->RaiseGraphicsInterrupt(source, cpu); !raised) {
+     REXGPU_ERROR("Graphics interrupt refused, {}", raised.error().message);
+@@ -299,6 +368,24 @@ void XenosGraphicsDriverBase::DispatchInterruptCallback(u32 source, u32 cpu) {
+ }
+ 
+ void XenosGraphicsDriverBase::MarkVblank() {
++  {
++    // Frame pacing stats (gpu.xenos.pacing_log); only the vsync thread calls MarkVblank.
++    static u64 last_vblank_tick = 0;
++    const u64 now = rex::Clock::GetHostTickCount();
++    if (last_vblank_tick) {
++      const u64 gap = now - last_vblank_tick;
++      if (gap * 1000 > rex::Clock::GetHostTickFrequency() * 18) {
++        g_gpu_stats.Add(g_gpu_stats.vblank_late);
++      }
++      u64 prev = g_gpu_stats.vblank_max_gap.load(std::memory_order_relaxed);
++      while (gap > prev &&
++             !g_gpu_stats.vblank_max_gap.compare_exchange_weak(prev, gap,
++                                                               std::memory_order_relaxed)) {
++      }
++    }
++    last_vblank_tick = now;
++    g_gpu_stats.Add(g_gpu_stats.vblanks);
++  }
+   if (command_processor_) {
+     command_processor_->IncrementCounter();
+   }
+diff --git a/src/gpu/xenos/xenos_graphics_driver_base.h b/src/gpu/xenos/xenos_graphics_driver_base.h
+index dbf9905..c254393 100644
+--- a/src/gpu/xenos/xenos_graphics_driver_base.h
++++ b/src/gpu/xenos/xenos_graphics_driver_base.h
+@@ -100,6 +100,12 @@ class REX_GPU_XENOS_API XenosGraphicsDriverBase : public IXenosGraphicsDriver,
+   /** Reports a finished swap to WaitForFrame. Command processor thread only. */
+   void NotifySwap();
+ 
++  /**
++   * Reports that the command processor started waiting at the title's post-swap vblank wait
++   * (gpu.xenos.late_frame_vblank). Command processor thread only.
++   */
++  void NotifyVblankGateEntered();
++
+   xenos::RegisterFile* GetRegisterFile() { return &register_file_; }
+   CommandProcessor* GetCommandProcessor() const { return command_processor_.get(); }
+ 
+@@ -194,6 +200,12 @@ class REX_GPU_XENOS_API XenosGraphicsDriverBase : public IXenosGraphicsDriver,
+   std::condition_variable frame_signal_;
+   u64 swap_count_ = 0;
+   u64 swap_seen_ = 0;
++
++  // late_frame_vblank: post-swap vblank wait entries, guarded by gate_mutex_.
++  std::mutex gate_mutex_;
++  std::condition_variable gate_signal_;
++  u64 gate_entries_ = 0;
++  u64 last_gate_tick_ = 0;  // guest ticks of the last entry, 0 before the first
+ };
+ 
+ }  // namespace rex::gpu
+diff --git a/src/gpu/xenos/xenos_settings.h b/src/gpu/xenos/xenos_settings.h
+index fe762ee..3015a39 100644
+--- a/src/gpu/xenos/xenos_settings.h
++++ b/src/gpu/xenos/xenos_settings.h
+@@ -88,6 +88,27 @@ class XenosSettings : public SettingOwner {
+               "Refresh the page valid state from GPU written memory at frame end. Turning it off "
+               "lowers CPU cost but may break memory coherency");
+   REX_SETTING(bool, occlusion_query_enable, true, "Enable host occlusion query handling");
++  REX_SETTING(bool, stats_log, false,
++              "Every 5 seconds, log the GPU work per frame: draws, resolves, EDRAM transfers, "
++              "render passes, uploads, texture loads and pipelines (for performance work)");
++  REX_SETTING(bool, pacing_log, false,
++              "Every 5 seconds, log frame pacing: guest vblank and swap intervals, and the time "
++              "the GPU command thread spends in WAIT_REG_MEM (for frame pacing work)");
++  REX_SETTING(i32, debug_swap_delay_ms, 0,
++              "Test only: sleep this long on the GPU command thread at every swap, to imitate a "
++              "slower GPU",
++              Range{0, 50});
++  REX_SETTING(i32, debug_swap_delay_jitter_ms, 0,
++              "Test only: vary debug_swap_delay_ms by up to this much either way, per frame",
++              Range{0, 20});
++  REX_SETTING(bool, late_frame_vblank, false,
++              "When a frame misses a vblank, hold that vblank until the frame reaches its "
++              "post-swap vblank wait (at most one extra refresh), so a late frame does not wait a "
++              "whole extra refresh and 60 fps titles drop to their real frame rate instead of 30. "
++              "Never adds vblanks");
++  REX_SETTING(bool, wait_reg_mem_back_off, false,
++              "Poll WAIT_REG_MEM with short yields and sleeps even when guest vblanks are paced, "
++              "instead of sleeping whole milliseconds");
+   REX_SETTING(bool, readback_resolve_half_pixel_offset, false,
+               "When draw resolution scaling is active, sample from the center of each scaled block "
+               "during resolve readback downscale");

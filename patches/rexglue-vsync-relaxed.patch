@@ -1,0 +1,54 @@
+diff --git a/src/gpu/xenos/host/present_policy.h b/src/gpu/xenos/host/present_policy.h
+index 469fb3a..ef7c60c 100644
+--- a/src/gpu/xenos/host/present_policy.h
++++ b/src/gpu/xenos/host/present_policy.h
+@@ -61,13 +61,16 @@ struct VulkanPresentModeSupport {
+ };
+ 
+ /**
+- * @return FIFO for vsync, otherwise the first allowed of immediate, mailbox and relaxed FIFO, and
+- * FIFO when none is allowed.
++ * @param relaxed_vsync With vsync, prefer relaxed FIFO (adaptive vsync) when it is allowed.
++ * @return FIFO for vsync (relaxed FIFO with relaxed_vsync when allowed), otherwise the first
++ * allowed of immediate, mailbox and relaxed FIFO, and FIFO when none is allowed.
+  */
+ constexpr VulkanPresentMode ChooseVulkanPresentMode(bool vsync,
+-                                                    const VulkanPresentModeSupport& support) {
++                                                    const VulkanPresentModeSupport& support,
++                                                    bool relaxed_vsync = false) {
+   if (vsync) {
+-    return VulkanPresentMode::kFifo;
++    return relaxed_vsync && support.fifo_relaxed ? VulkanPresentMode::kFifoRelaxed
++                                                 : VulkanPresentMode::kFifo;
+   }
+   if (support.immediate) {
+     return VulkanPresentMode::kImmediate;
+diff --git a/src/gpu/xenos/host/vulkan/vulkan_presenter.cpp b/src/gpu/xenos/host/vulkan/vulkan_presenter.cpp
+index 5645de1..256c172 100644
+--- a/src/gpu/xenos/host/vulkan/vulkan_presenter.cpp
++++ b/src/gpu/xenos/host/vulkan/vulkan_presenter.cpp
+@@ -803,7 +803,8 @@ VkSwapchainKHR VulkanPresenter::PaintContext::CreateSwapchainForVulkanSurface(
+            has_present_mode(VK_PRESENT_MODE_IMMEDIATE_KHR),
+        settings.allow_present_mode_mailbox.Get() && has_present_mode(VK_PRESENT_MODE_MAILBOX_KHR),
+        settings.allow_present_mode_fifo_relaxed.Get() &&
+-           has_present_mode(VK_PRESENT_MODE_FIFO_RELAXED_KHR)})) {
++           has_present_mode(VK_PRESENT_MODE_FIFO_RELAXED_KHR)},
++      settings.vsync_relaxed.Get())) {
+     case VulkanPresentMode::kImmediate:
+       swapchain_create_info.presentMode = VK_PRESENT_MODE_IMMEDIATE_KHR;
+       break;
+diff --git a/src/gpu/xenos/host/vulkan/vulkan_settings.h b/src/gpu/xenos/host/vulkan/vulkan_settings.h
+index 954aeb1..1201af1 100644
+--- a/src/gpu/xenos/host/vulkan/vulkan_settings.h
++++ b/src/gpu/xenos/host/vulkan/vulkan_settings.h
+@@ -71,6 +71,10 @@ class VulkanSettings : public SettingOwner {
+   REX_SETTING(bool, allow_present_mode_mailbox, true,
+               "Allow mailbox present mode (triple buffering)");
+   REX_SETTING(bool, allow_present_mode_fifo_relaxed, true, "Allow FIFO relaxed present mode");
++  REX_SETTING(bool, vsync_relaxed, false,
++              "With vsync on, use relaxed FIFO (adaptive vsync) when available: a frame that "
++              "misses a refresh is shown at once instead of waiting a whole extra refresh, so a "
++              "frame rate just under the refresh rate doesn't halve");
+   REX_SETTING(bool, validation, false, "Enable Vulkan validation layers", kStartupOnly);
+   REX_SETTING(bool, prefer_geometry_shader, true,
+               "Prefer physical devices supporting geometryShader when selecting automatically",

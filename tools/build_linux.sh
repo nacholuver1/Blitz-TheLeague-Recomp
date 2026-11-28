@@ -16,7 +16,7 @@ action="${1:-release}"
 case "$action" in
   sdk)
     cd "$SDK"
-    for p in rexglue-dcbz-128 rexglue-audio-diag rexglue-ffx-present rexglue-first-press-user0 rexglue-audio-starve-snapshot; do
+    for p in rexglue-dcbz-128 rexglue-audio-diag rexglue-vsync-relaxed rexglue-ffx-present rexglue-vsync-guest-pacing rexglue-first-press-user0 rexglue-audio-starve-snapshot rexglue-gpu-pacing; do
       # A later patch can change lines an earlier one added, so its reverse check fails once
       # both are in: patches applied here are recorded in a stamp file and skipped after that.
       if grep -qxF "$p" .blitz-applied-patches 2>/dev/null; then

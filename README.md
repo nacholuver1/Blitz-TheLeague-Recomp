@@ -55,7 +55,7 @@ git clone --recursive https://github.com/nacholuver1/Blitz-TheLeague-Recomp.git
 cd Blitz-TheLeague-Recomp
 
 rem 1. ReXGlue SDK v0.11.0 (submodule) + this project's patches, then build and install it
-git -C deps/rexglue-sdk apply ../../patches/rexglue-dcbz-128.patch ../../patches/rexglue-audio-diag.patch ../../patches/rexglue-ffx-present.patch
+git -C deps/rexglue-sdk apply ../../patches/rexglue-dcbz-128.patch ../../patches/rexglue-audio-diag.patch ../../patches/rexglue-vsync-relaxed.patch ../../patches/rexglue-ffx-present.patch ../../patches/rexglue-vsync-guest-pacing.patch ../../patches/rexglue-first-press-user0.patch ../../patches/rexglue-audio-starve-snapshot.patch ../../patches/rexglue-gpu-pacing.patch
 tools\build_sdk.bat
 
 rem 2. Put your extracted disc in game\ (must contain default.xex), e.g.
@@ -116,7 +116,7 @@ the places where a straight translation behaves differently from a real Xbox 360
 | [blitz/src/blitz_look.cpp](blitz/src/blitz_look.cpp) | The menus' look, after the game's own menus (scene and colours in `blitz_palette.h`): all drawn, no game art; Impact / Bahnschrift from Windows, DejaVu / Liberation on Linux. |
 | [blitz/src/blitz_updater.cpp](blitz/src/blitz_updater.cpp) | Updates from GitHub releases: the launcher checks `releases/latest`, a newer release opens an Update now / Later popup, the package must match GitHub's SHA-256 digest, files are swapped with `.old` backups (rolled back on failure; `*.toml`, `game`, `user`, `cache`, `logs` never touched) and the new version restarts. WinHTTP + `tar.exe` on Windows, `curl` + `tar` on Linux. The version is `project(VERSION)` in `blitz/CMakeLists.txt`; `BLITZ_UPDATE_URL` points it at a test server. |
 | [blitz/src/blitz_fp_guard.h](blitz/src/blitz_fp_guard.h), [blitz_crash_dump.h](blitz/src/blitz_crash_dump.h) | Masks host SSE floating-point exceptions; writes minidumps to `crashes\`. |
-| [patches/](patches/) | SDK patches: `dcbz` clears a 128-byte cache line on Xenon (the codegen cleared 32), and extra audio-stream diagnostics in the log. `rexglue-cs-debug-trace.patch` is an optional contended-lock tracer used to find the boot deadlock. `rexglue-ffx-present.patch` adds AMD FidelityFX FSR 1 / CAS upscaling to the presenter (ported from Xenia) and a presentation shape setting for ultrawide. |
+| [patches/](patches/) | SDK patches: `dcbz` clears a 128-byte cache line on Xenon (the codegen cleared 32), and extra audio-stream diagnostics in the log. `rexglue-cs-debug-trace.patch` is an optional contended-lock tracer used to find the boot deadlock. `rexglue-ffx-present.patch` adds AMD FidelityFX FSR 1 / CAS upscaling to the presenter (ported from Xenia) and a presentation shape setting for ultrawide. `rexglue-vsync-relaxed` / `rexglue-vsync-guest-pacing` add relaxed VSync and keep guest vblanks at the refresh rate with VSync off; `rexglue-first-press-user0` makes the first pad pressed player 1; `rexglue-audio-starve-snapshot` logs audio-starve diagnostics; `rexglue-gpu-pacing` adds GPU frame-pacing diagnostics (pacing log, test-only swap delay), the opt-in late-frame vblank hold (`gpu.xenos.late_frame_vblank`) and Vulkan command buffer / shared memory work. Apply them in the order listed above (as `tools/build_linux.sh` does). |
 | [tools/](tools/) | Build scripts (Windows and Linux), release packers, ISO extractor, XEX header dump, and the debugging helpers used along the way (guest memory peek, LLDB probe, thread stack dump, screenshot automation). |
 
 ## Known issues
